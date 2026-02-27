@@ -237,6 +237,53 @@ Deno.test("malformed JSON returns 400", async () => {
   assertEquals(await res.json(), { error: "invalid JSON" });
 });
 
+Deno.test("malformed JSON on /snapshot returns 400", async () => {
+  const server = createServer(stubDeps());
+  const res = await server.request("/snapshot", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: "not json",
+  });
+  assertEquals(res.status, 400);
+  assertEquals(await res.json(), { error: "invalid JSON" });
+});
+
+Deno.test("malformed JSON on /screenshot returns 400", async () => {
+  const server = createServer(stubDeps());
+  const res = await server.request("/screenshot", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: "not json",
+  });
+  assertEquals(res.status, 400);
+  assertEquals(await res.json(), { error: "invalid JSON" });
+});
+
+Deno.test("serve binds to loopback and handles requests", async () => {
+  const server = createServer(stubDeps());
+  const httpServer = server.serve({ port: 0 });
+  const addr = httpServer.addr as Deno.NetAddr;
+  assertEquals(addr.hostname, "127.0.0.1");
+  try {
+    const res = await fetch(`http://127.0.0.1:${addr.port}/health`);
+    assertEquals(res.status, 200);
+    const body = await res.json();
+    assertEquals(body.status, "ok");
+  } finally {
+    await httpServer.shutdown();
+  }
+});
+
+Deno.test("POST /shutdown stops the served instance", async () => {
+  const server = createServer(stubDeps());
+  const httpServer = server.serve({ port: 0 });
+  const addr = httpServer.addr as Deno.NetAddr;
+  const res = await fetch(`http://127.0.0.1:${addr.port}/shutdown`, { method: "POST" });
+  assertEquals(res.status, 200);
+  assertEquals(await res.json(), { ok: true });
+  await httpServer.finished;
+});
+
 Deno.test("POST /screenshot passes fullPage option", async () => {
   let receivedFullPage: boolean | undefined;
   const server = createServer(stubDeps({

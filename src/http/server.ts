@@ -21,8 +21,8 @@ export interface ServerDeps {
 export interface Server {
   /** Send a synthetic request to the handler (for testing). */
   request(path: string, init?: RequestInit): Promise<Response>;
-  /** Start listening on given port and hostname. Returns the Deno.HttpServer for lifecycle. */
-  serve(options: { port: number; hostname: string }): Deno.HttpServer;
+  /** Start listening on 127.0.0.1. Returns the Deno.HttpServer for lifecycle. */
+  serve(options: { port: number }): Deno.HttpServer;
 }
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -89,12 +89,12 @@ export function createServer(deps: ServerDeps): Server {
       methods: ["POST"],
       handle: async (req) => {
         const body = await readJson(req);
-        const opts = body ?? {};
+        if (!body) return errorResponse("invalid JSON", 400);
         const options: SnapshotOptions = {
-          name: (opts.name as string) ?? "default",
-          maxDepth: opts.maxDepth as number | undefined,
-          maxNodes: opts.maxNodes as number | undefined,
-          selector: opts.selector as string | undefined,
+          name: (body.name as string) ?? "default",
+          maxDepth: body.maxDepth as number | undefined,
+          maxNodes: body.maxNodes as number | undefined,
+          selector: body.selector as string | undefined,
         };
         const result = await deps.snapshot(options);
         return jsonResponse(result);
@@ -117,9 +117,9 @@ export function createServer(deps: ServerDeps): Server {
       methods: ["POST"],
       handle: async (req) => {
         const body = await readJson(req);
-        const opts = body ?? {};
-        const name = (opts.name as string) ?? "default";
-        const fullPage = opts.fullPage as boolean | undefined;
+        if (!body) return errorResponse("invalid JSON", 400);
+        const name = (body.name as string) ?? "default";
+        const fullPage = body.fullPage as boolean | undefined;
         const filePath = await deps.screenshot(name, fullPage);
         return jsonResponse({ path: filePath });
       },
@@ -161,8 +161,11 @@ export function createServer(deps: ServerDeps): Server {
       const url = path.startsWith("http") ? path : `http://localhost${path}`;
       return handler(new Request(url, init));
     },
-    serve(options: { port: number; hostname: string }): Deno.HttpServer {
-      httpServer = Deno.serve({ ...options, onListen: () => {} }, handler);
+    serve(options: { port: number }): Deno.HttpServer {
+      httpServer = Deno.serve(
+        { port: options.port, hostname: "127.0.0.1", onListen: () => {} },
+        handler,
+      );
       return httpServer;
     },
   };
