@@ -266,10 +266,11 @@ Every adapter has the same rule: import only from `domain/`. No adapter imports 
 receives its wired dependencies (navigate, eval, snapshot functions) from `main.ts` via constructor
 injection.
 
-**Enforcement:** A `deno task lint:deps` Deno script that uses `deno info --json` to resolve the
-full module graph for each adapter's `mod.ts`, then asserts no illegal cross-adapter imports exist.
-This uses Deno's own module resolution — handles re-exports, barrel files, dynamic imports, and path
-aliases correctly. The rules:
+**Enforcement:** A `deno task lint:deps` Deno script that uses `deno info --json` to scan all `.ts`
+files in each module directory (not just the `mod.ts` graph), then asserts no illegal cross-adapter
+imports exist. Stray files in `src/` root are also checked independently. This uses Deno's own
+module resolution — handles re-exports, barrel files, dynamic imports, and path aliases correctly.
+The rules:
 
 - `domain/` may import nothing from `src/`
 - Each adapter (`cdp/`, `aria/`, `http/`, `cli/`) may import only from `domain/`

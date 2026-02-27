@@ -217,7 +217,6 @@ cd /Users/filip/code/deno/scraper && git add src/domain/ && git commit -m "feat:
 
 **Files:**
 
-- Create: `src/app/mod.ts`
 - Create: `src/cdp/mod.ts`
 - Create: `src/aria/mod.ts`
 - Create: `src/http/mod.ts`
@@ -230,12 +229,6 @@ cd /Users/filip/code/deno/scraper && git add src/domain/ && git commit -m "feat:
 
 Each `mod.ts` is an empty barrel for now — adapters will export their implementations as we build
 them.
-
-Create `src/app/mod.ts`:
-
-```ts
-// Use cases: orchestrate domain interfaces. Imports only from ../domain/.
-```
 
 Create `src/cdp/mod.ts`:
 
@@ -252,7 +245,7 @@ Create `src/aria/mod.ts`:
 Create `src/http/mod.ts`:
 
 ```ts
-// Adapter: Deno.serve HTTP server. Delegates to app/ use cases.
+// Adapter: Deno.serve HTTP server. Delegates to domain functions via injected deps.
 ```
 
 Create `src/cli/mod.ts`:
@@ -264,7 +257,7 @@ Create `src/cli/mod.ts`:
 Create `src/main.ts`:
 
 ```ts
-// Composition root: wires adapters -> app -> domain.
+// Composition root: wires adapters -> domain.
 // `scraper start` launches daemon, all other commands are CLI client.
 ```
 
@@ -283,6 +276,10 @@ cd /Users/filip/code/deno/scraper && git add src/ tests/ scripts/ && git commit 
 ---
 
 ### Task 4: Create dependency lint script
+
+> **Note:** The code below is the original plan version which included `app/` rules and only
+> analyzed `mod.ts` graphs. The actual script was updated to remove `app/`, scan all `.ts` files in
+> each module directory, and independently check stray files in `src/` root.
 
 **Files:**
 
@@ -469,6 +466,10 @@ cd /Users/filip/code/deno/scraper && git add scripts/lint-deps.test.ts && git co
 ---
 
 ### Task 6: Create CLAUDE.md
+
+> **Note:** The CLAUDE.md content below is the original plan version which included `app/` layer
+> rules. The actual CLAUDE.md was updated to reflect the simplified architecture (no `app/`, all
+> adapters import only from `domain/`).
 
 **Files:**
 

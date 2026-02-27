@@ -11,7 +11,7 @@
  * - http/ may import only from domain/
  * - cli/ may import only from domain/
  * - main.ts may import from all modules (composition root)
- * - No other file outside a module may import across module boundaries
+ * - Stray .ts files in src/ root (not main.ts) may not import any module
  */
 
 const ADAPTER_MODULES = ["cdp", "aria", "http", "cli"] as const;
@@ -43,10 +43,6 @@ function getModule(specifier: string): Module | null {
     if (specifier.includes(`/src/${mod}/`)) return mod;
   }
   return null;
-}
-
-function isMainTs(specifier: string): boolean {
-  return specifier.endsWith("/src/main.ts");
 }
 
 async function findTsFiles(dir: string): Promise<string[]> {
@@ -112,27 +108,29 @@ async function checkModule(mod: Module): Promise<string[]> {
   return violations;
 }
 
-async function checkMainTs(): Promise<string[]> {
-  const info = await analyzeFile("src/main.ts");
-  if (!info) return [];
+async function checkStrayFiles(): Promise<string[]> {
+  // Scan src/ root for .ts files that aren't main.ts.
+  // These are analyzed independently (not via main.ts's graph)
+  // so unreferenced files are still caught.
+  const strayFiles = (await findTsFiles("src")).filter((f) => f !== "src/main.ts");
+  if (strayFiles.length === 0) return [];
 
   const violations: string[] = [];
 
-  // main.ts may import from any module — that's fine.
-  // But check that no NON-main file in src/ root imports across boundaries.
-  for (const module of info.modules) {
-    if (isMainTs(module.specifier)) continue;
-    if (getModule(module.specifier) !== null) continue;
+  for (const file of strayFiles) {
+    const info = await analyzeFile(file);
+    if (!info) continue;
 
-    // This is a src/ root file that isn't main.ts and isn't in a module
-    for (const dep of module.dependencies ?? []) {
-      const depSpec = dep.code?.specifier ?? dep.specifier;
-      const depModule = getModule(depSpec);
-      if (depModule !== null) {
-        violations.push(
-          `Stray file imports from ${depModule}/ (${module.specifier} -> ${depSpec}). ` +
-            `Only main.ts may import across modules.`,
-        );
+    for (const module of info.modules) {
+      for (const dep of module.dependencies ?? []) {
+        const depSpec = dep.code?.specifier ?? dep.specifier;
+        const depModule = getModule(depSpec);
+        if (depModule !== null) {
+          violations.push(
+            `Stray file imports from ${depModule}/ (${module.specifier} -> ${depSpec}). ` +
+              `Only main.ts may import across modules.`,
+          );
+        }
       }
     }
   }
@@ -157,14 +155,14 @@ async function main(): Promise<void> {
     }
   }
 
-  const mainViolations = await checkMainTs();
+  const mainViolations = await checkStrayFiles();
   if (mainViolations.length > 0) {
     allViolations.push(...mainViolations);
     for (const v of mainViolations) {
       console.error(`  ✗ ${v}`);
     }
   } else {
-    console.log("  ✓ main.ts");
+    console.log("  ✓ src/ root (no stray files)");
   }
 
   if (allViolations.length > 0) {
