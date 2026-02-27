@@ -94,10 +94,16 @@ export async function launchChrome(options?: LaunchOptions): Promise<ChromeProce
     stderr: "null",
   });
   const process = command.spawn();
+  const chrome: ChromeProcess = { pid: process.pid, port, process };
 
-  await waitForChrome(port);
+  try {
+    await waitForChrome(port);
+  } catch (error) {
+    await killChrome(chrome);
+    throw error;
+  }
 
-  return { pid: process.pid, port, process };
+  return chrome;
 }
 
 /** Kill a Chrome process. */

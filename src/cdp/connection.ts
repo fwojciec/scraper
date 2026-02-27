@@ -66,21 +66,20 @@ export async function createCdpConnection(port: number): Promise<CdpBrowserServi
       return { name, url: req.url, targetId: existing.targetId };
     }
 
-    // Create new target
-    const { targetId } = await cdp.Target.createTarget({ url: req.url });
+    // Create target at about:blank, attach and enable domains, then navigate.
+    // This avoids a race where loadEventFired has already fired before we listen.
+    const { targetId } = await cdp.Target.createTarget({ url: "about:blank" });
 
-    // Attach to target to get a session
     const { sessionId } = await cdp.Target.attachToTarget({
       targetId,
       flatten: true,
     });
 
-    // Enable domains on the session
     await cdp.Page.enable(null, sessionId);
     await cdp.Runtime.enable(null, sessionId);
 
-    // Wait for page to load
     if (req.url !== "about:blank") {
+      await cdp.Page.navigate({ url: req.url }, sessionId);
       await cdp.Page.loadEventFired(null, sessionId);
     }
 
