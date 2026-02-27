@@ -1,6 +1,6 @@
 ---
 name: work
-description: Pick a GitHub issue, create branch, implement with TDD, review, create PR
+description: Use when picking up a GitHub issue to implement, or when asked to work on an issue by number
 argument-hint: "[issue-number]"
 allowed-tools: Bash, Read, Write, Edit, Grep, Glob, Task, Skill, AskUserQuestion
 ---

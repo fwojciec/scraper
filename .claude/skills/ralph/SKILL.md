@@ -1,6 +1,6 @@
 ---
 name: ralph
-description: Execute one iteration of the Ralph loop - pick next open issue from milestone, implement, review, merge
+description: Use when autonomously processing a GitHub milestone, or when running in a loop to iterate through open issues
 argument-hint: "<milestone-name>"
 allowed-tools: Bash, Read, Write, Edit, Grep, Glob, Task, Skill
 ---

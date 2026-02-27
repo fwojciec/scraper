@@ -1,6 +1,6 @@
 ---
 name: gh-workflow
-description: Manage project work via GitHub CLI — issues, milestones, PRs
+description: Use when creating GitHub issues, organizing milestones, or replying to PR review comments via CLI
 ---
 
 # GitHub Workflow
