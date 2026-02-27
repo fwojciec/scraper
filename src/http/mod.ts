@@ -1,1 +1,2 @@
-// Adapter: Deno.serve HTTP server. Receives wired domain functions from main.ts.
+export { createServer } from "./server.ts";
+export type { Server, ServerDeps } from "./server.ts";
