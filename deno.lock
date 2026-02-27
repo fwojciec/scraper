@@ -1,10 +1,14 @@
 {
   "version": "5",
   "specifiers": {
+    "jsr:@simple-cdp/simple-cdp@^1.8.0": "1.8.6",
     "jsr:@std/assert@1": "1.0.19",
     "jsr:@std/internal@^1.0.12": "1.0.12"
   },
   "jsr": {
+    "@simple-cdp/simple-cdp@1.8.6": {
+      "integrity": "beabfb0dd8cb8c964f09249b94ef23334d65a583f622f43d6302222b25ee3af8"
+    },
     "@std/assert@1.0.19": {
       "integrity": "eaada96ee120cb980bc47e040f82814d786fe8162ecc53c91d8df60b8755991e",
       "dependencies": [
