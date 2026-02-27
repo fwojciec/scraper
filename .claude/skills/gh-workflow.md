@@ -8,15 +8,19 @@ description: Manage project work via GitHub CLI — issues, milestones, PRs
 ## Issue Template (mandatory)
 
 ### Context
+
 WHAT and WHY, never HOW.
 
 ### Investigation Starting Points
+
 - Relevant files, functions, tests
 
 ### Scope Constraints
+
 - What is NOT in scope
 
 ### Validation
+
 - Testable acceptance criteria
 
 ## Milestones

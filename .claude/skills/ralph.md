@@ -17,8 +17,7 @@ Milestone: $ARGUMENTS
 
 ## Current State
 
-Branch: !`git branch --show-current`
-Uncommitted changes: !`git status --porcelain`
+Branch: !`git branch --show-current` Uncommitted changes: !`git status --porcelain`
 
 ---
 
@@ -31,6 +30,7 @@ gh issue list --milestone "$ARGUMENTS" --state open --json number,title --jq 'so
 No open issues → `touch .ralph-complete` and exit.
 
 Take lowest number. Read with comments:
+
 ```bash
 gh issue view <number> --comments
 ```
@@ -71,13 +71,15 @@ Run `roborev review` exactly once — each invocation is a paid review.
 
 ### Yield (persistent failure)
 
-Comment learnings on issue, abandon branch, return to main. Do NOT create `.ralph-complete` — loop will retry with improved context.
+Comment learnings on issue, abandon branch, return to main. Do NOT create `.ralph-complete` — loop
+will retry with improved context.
 
 ---
 
 ## Phase 5: Complete
 
 Commit, merge to main, push:
+
 ```bash
 git add .
 git commit -m "$(cat <<'EOF'
