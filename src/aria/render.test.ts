@@ -93,3 +93,8 @@ Deno.test("render escapes backslashes in names", () => {
   const yaml = renderYaml([{ role: "link", name: "C:\\Users\\file" }]);
   assertStringIncludes(yaml, `- link "C:\\\\Users\\\\file"`);
 });
+
+Deno.test("render escapes newlines and tabs in names", () => {
+  const yaml = renderYaml([{ role: "button", name: "a\nb\r\tc" }]);
+  assertStringIncludes(yaml, `- button "a\\nb\\r\\tc"`);
+});
