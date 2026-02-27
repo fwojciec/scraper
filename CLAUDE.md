@@ -1,48 +1,21 @@
-# Scraper
+## Design Philosophy
 
-Intelligent web scraping CLI for LLM agents. Uses CDP to control headless Chrome, ARIA snapshots for
-compact page representation, JS eval for surgical data extraction.
+- Ben Johnson Standard Package Layout — `src/domain/` is the pure functional core (zero imports from other `src/` modules), packages organized by dependency not theme, /go-standard-package-layout skill if in doubt
+- `src/main.ts` is the composition root — wires adapters together
+- dependency injection via function factory parameter objects
 
-## Architecture
+## Dependency Rule
 
-Ben Johnson's standard package layout adapted for TypeScript/Deno.
+- `domain/` imports nothing from `src/`
+- adapters import only from `domain/`, never from each other
+- enforced by `deno task lint:deps` — violations are build failures
 
-### Dependency rule (NEVER violate)
+## Test Philosophy
 
-- `src/domain/` is the functional core: pure types, interfaces, and pure functions. Zero I/O, zero
-  side effects, imports NOTHING from other `src/` modules.
-- Adapter packages (`cdp/`, `aria/`, `http/`, `cli/`) are the imperative shell. Each imports only
-  from `domain/`.
-- Adapters NEVER import from other adapters.
-- `src/main.ts` is the composition root — imports from all adapters and wires them together.
+- write failing tests first, then implement
+- prefer behavioral assertions to testing implementation
+- co-located as `<name>.test.ts`
 
-Enforced by `deno task lint:deps` using `deno info --json`. Violations are build failures.
+## Quality Gate
 
-### File patterns
-
-- Domain: `src/domain/<concept>.ts` — types, interfaces, and pure orchestration functions
-- Adapters: `src/<dependency-name>/<implementation>.ts`
-- Tests: co-located as `<filename>.test.ts`
-- Integration tests: `tests/integration/` with local HTML fixtures
-- All dependencies injected via function factory parameter objects
-
-## Commands
-
-- `deno task dev` — run the daemon
-- `deno task test` — run unit tests
-- `deno task test:integration` — run integration tests (requires Chrome)
-- `deno task lint:deps` — check dependency boundaries
-- `deno task ci` — full CI pipeline (fmt, lint, check, lint:deps, test)
-- `deno lint && deno fmt --check` — verify formatting
-
-## Tech Stack
-
-- Deno 2.x, TypeScript (strict)
-- `@simple-cdp/simple-cdp` (JSR) — CDP over WebSocket
-- `@b-fuze/deno-dom` — DOM for unit tests
-- `Deno.serve` — HTTP server (no framework)
-- `Deno.Command` — Chrome process management
-
-## Design Doc
-
-See `docs/plans/2026-02-26-intelligent-scraper-mvp-design.md` for full architecture.
+deno task ci

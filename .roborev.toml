@@ -1,0 +1,11 @@
+review_guidelines = """
+Ben Johnson's Standard Package Layout adapted for TypeScript/Deno.
+
+Architectural checks:
+- src/domain/ is the pure functional core — types, interfaces, pure functions. Zero imports from other src/ modules.
+- Adapter packages (src/cdp/, src/aria/, src/http/, src/cli/) are named after their dependency, not concepts.
+- Adapters import only from domain/, never from each other.
+- src/main.ts is the composition root — wires adapters, contains no business logic.
+- Dependencies injected via function factory parameter objects.
+- Enforced by deno task lint:deps.
+"""
