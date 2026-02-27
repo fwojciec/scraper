@@ -1,6 +1,4 @@
 {
-  "name": "@fwojciec/scraper",
-  "version": "0.1.0",
   "imports": {
     "@simple-cdp/simple-cdp": "jsr:@simple-cdp/simple-cdp@^1.8",
     "@b-fuze/deno-dom": "jsr:@b-fuze/deno-dom@^0.1",
