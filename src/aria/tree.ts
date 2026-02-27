@@ -113,7 +113,8 @@ function getImplicitRole(el: DomElement): string | null {
 }
 
 function isHidden(el: DomElement): boolean {
-  if (el.getAttribute("aria-hidden") === "true") return true;
+  const ariaHidden = el.getAttribute("aria-hidden");
+  if (ariaHidden !== null && ariaHidden.toLowerCase() === "true") return true;
   if (el.hasAttribute("hidden")) return true;
   const style = el.getAttribute("style");
   if (style) {
@@ -165,7 +166,9 @@ function buildNode(
   if (isHidden(el)) return [];
 
   const explicitRole = el.getAttribute("role");
-  const role = explicitRole || getImplicitRole(el);
+  const role = (explicitRole === "presentation" || explicitRole === "none")
+    ? null
+    : explicitRole || getImplicitRole(el);
 
   // Transparent/generic element — process children and return them directly
   if (!role) {
@@ -234,9 +237,11 @@ function buildChildren(
     if (child.nodeType === 3 /* TEXT_NODE */) {
       // Text nodes don't count toward maxNodes — they typically get absorbed
       // into parent names and don't add output lines.
-      const text = (child.textContent ?? "").trim();
-      if (text) {
-        results.push({ role: "text", name: text });
+      // Preserve raw text (normalize internal whitespace) so inter-node spaces
+      // aren't lost when text is later concatenated for accessible names.
+      const raw = child.textContent ?? "";
+      if (raw.trim()) {
+        results.push({ role: "text", name: raw.replace(/\s+/g, " ") });
       }
     } else if (child.nodeType === 1 /* ELEMENT_NODE */) {
       results.push(...buildNode(child as DomElement, depth, maxDepth, ctx));

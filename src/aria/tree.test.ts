@@ -174,7 +174,7 @@ Deno.test("maxDepth limits tree depth", () => {
   );
   assertStringIncludes(yaml, "navigation:");
   assertStringIncludes(yaml, "list:");
-  // listitem is at depth 2, should still appear but with text name, not children
+  // At maxDepth=2 the link child is omitted; listitem appears without children
   assert(!yaml.includes("link"));
 });
 
@@ -264,7 +264,30 @@ Deno.test("form without label is transparent", () => {
 
 Deno.test("explicit role on span prevents text leaking into parent name", () => {
   const yaml = snapshot(`<p>Hello <span role="button">Click</span></p>`);
-  // "Click" should not be part of paragraph's name
   assert(!yaml.includes(`paragraph "Hello Click"`));
   assertStringIncludes(yaml, `button "Click"`);
+});
+
+Deno.test("role=presentation is transparent", () => {
+  const yaml = snapshot(`<div role="presentation"><a href="/">Home</a></div>`);
+  assert(!yaml.includes("presentation"));
+  assertStringIncludes(yaml, `link "Home"`);
+});
+
+Deno.test("role=none is transparent", () => {
+  const yaml = snapshot(`<nav role="none"><a href="/">Home</a></nav>`);
+  assert(!yaml.includes("navigation"));
+  assert(!yaml.includes("none"));
+  assertStringIncludes(yaml, `link "Home"`);
+});
+
+Deno.test("aria-hidden=True (uppercase) is excluded", () => {
+  const yaml = snapshot(`<p>Shown</p><p aria-hidden="True">Hidden</p>`);
+  assertStringIncludes(yaml, "Shown");
+  assert(!yaml.includes("Hidden"));
+});
+
+Deno.test("text across inline elements preserves spacing", () => {
+  const yaml = snapshot(`<p>Click <strong>here</strong> now</p>`);
+  assertStringIncludes(yaml, `paragraph "Click here now"`);
 });
