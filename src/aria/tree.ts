@@ -44,7 +44,18 @@ const INTERACTABLE_ROLES = new Set([
   "combobox",
 ]);
 
-function getImplicitRole(el: DomElement): string | null {
+const SECTIONING_ELEMENTS = new Set([
+  "ARTICLE",
+  "ASIDE",
+  "MAIN",
+  "NAV",
+  "SECTION",
+]);
+
+function getImplicitRole(
+  el: DomElement,
+  inSectioningElement = false,
+): string | null {
   const tag = el.tagName;
   switch (tag) {
     case "A":
@@ -87,11 +98,11 @@ function getImplicitRole(el: DomElement): string | null {
     case "NAV":
       return "navigation";
     case "HEADER":
-      return "banner";
+      return inSectioningElement ? null : "banner";
     case "MAIN":
       return "main";
     case "FOOTER":
-      return "contentinfo";
+      return inSectioningElement ? null : "contentinfo";
     case "ASIDE":
       return "complementary";
     case "SECTION":
@@ -164,6 +175,7 @@ function buildNode(
   depth: number,
   maxDepth: number,
   ctx: BuildContext,
+  inSectioningElement = false,
 ): AriaNode[] {
   if (ctx.nodeCount >= ctx.maxNodes) return [];
   if (isHidden(el)) return [];
@@ -171,11 +183,14 @@ function buildNode(
   const explicitRole = el.getAttribute("role");
   const role = (explicitRole === "presentation" || explicitRole === "none")
     ? null
-    : explicitRole || getImplicitRole(el);
+    : explicitRole || getImplicitRole(el, inSectioningElement);
+
+  const childSectioning = inSectioningElement ||
+    SECTIONING_ELEMENTS.has(el.tagName);
 
   // Transparent/generic element — process children and return them directly
   if (!role) {
-    return buildChildren(el, depth, maxDepth, ctx);
+    return buildChildren(el, depth, maxDepth, ctx, childSectioning);
   }
 
   ctx.nodeCount++;
@@ -198,7 +213,7 @@ function buildNode(
 
   // Process children if within depth limit
   if (depth < maxDepth) {
-    const children = buildChildren(el, depth + 1, maxDepth, ctx);
+    const children = buildChildren(el, depth + 1, maxDepth, ctx, childSectioning);
     if (children.length > 0) {
       // If node has no explicit name and all children are text, concatenate as name
       if (!node.name) {
@@ -233,6 +248,7 @@ function buildChildren(
   depth: number,
   maxDepth: number,
   ctx: BuildContext,
+  inSectioningElement = false,
 ): AriaNode[] {
   const results: AriaNode[] = [];
   for (const child of el.childNodes) {
@@ -247,7 +263,9 @@ function buildChildren(
         results.push({ role: "text", name: raw.replace(/\s+/g, " ") });
       }
     } else if (child.nodeType === 1 /* ELEMENT_NODE */) {
-      results.push(...buildNode(child as DomElement, depth, maxDepth, ctx));
+      results.push(
+        ...buildNode(child as DomElement, depth, maxDepth, ctx, inSectioningElement),
+      );
     }
   }
   return results;

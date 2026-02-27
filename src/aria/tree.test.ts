@@ -296,6 +296,38 @@ Deno.test("aria-hidden=True (uppercase) is excluded", () => {
   assert(!yaml.includes("Hidden"));
 });
 
+Deno.test("thead/tbody/tfoot get rowgroup role", () => {
+  const html = `<table>
+    <thead><tr><th>Header</th></tr></thead>
+    <tbody><tr><td>Body</td></tr></tbody>
+    <tfoot><tr><td>Footer</td></tr></tfoot>
+  </table>`;
+  const yaml = snapshot(html);
+  assertEquals(yaml.match(/rowgroup:/g)?.length, 3);
+});
+
+Deno.test("header inside article is generic, not banner", () => {
+  const yaml = snapshot(`<article><header><h1>Title</h1></header></article>`);
+  assert(!yaml.includes("banner"));
+  assertStringIncludes(yaml, "article:");
+  assertStringIncludes(yaml, `heading "Title"`);
+});
+
+Deno.test("footer inside section is generic, not contentinfo", () => {
+  const yaml = snapshot(
+    `<section aria-label="Main"><footer><p>Copyright</p></footer></section>`,
+  );
+  assert(!yaml.includes("contentinfo"));
+  assertStringIncludes(yaml, `region "Main":`);
+  assertStringIncludes(yaml, `paragraph "Copyright"`);
+});
+
+Deno.test("top-level header/footer keep landmark roles", () => {
+  const yaml = snapshot(`<header><p>Logo</p></header><footer><p>Legal</p></footer>`);
+  assertStringIncludes(yaml, "banner:");
+  assertStringIncludes(yaml, "contentinfo:");
+});
+
 Deno.test("text across inline elements preserves spacing", () => {
   const yaml = snapshot(`<p>Click <strong>here</strong> now</p>`);
   assertStringIncludes(yaml, `paragraph "Click here now"`);
