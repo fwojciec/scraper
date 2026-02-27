@@ -46,6 +46,22 @@ export async function createCdpConnection(port: number): Promise<CdpBrowserServi
   await cdp.Target.setDiscoverTargets({ discover: true });
 
   const pages = new Map<string, ManagedPage>();
+  const pending = new Map<string, Promise<PageInfo>>();
+
+  // deno-lint-ignore no-explicit-any
+  async function waitForLoad(cdpClient: any, sessionId: string): Promise<void> {
+    await cdpClient.Runtime.evaluate(
+      {
+        expression: `new Promise(r => {
+          if (document.readyState === "complete") r();
+          else window.addEventListener("load", () => r(), { once: true });
+        })`,
+        awaitPromise: true,
+        returnByValue: true,
+      },
+      sessionId,
+    );
+  }
 
   function getPage(name: string): ManagedPage {
     const page = pages.get(name);
@@ -53,21 +69,20 @@ export async function createCdpConnection(port: number): Promise<CdpBrowserServi
     return page;
   }
 
-  async function navigate(req: NavigateRequest): Promise<PageInfo> {
-    const name = req.name ?? "default";
+  async function doNavigate(req: NavigateRequest, name: string): Promise<PageInfo> {
     const existing = pages.get(name);
 
     if (existing) {
       await cdp.Page.navigate({ url: req.url }, existing.sessionId);
       if (req.url !== "about:blank") {
-        await cdp.Page.loadEventFired(null, existing.sessionId);
+        await waitForLoad(cdp, existing.sessionId);
       }
       existing.url = req.url;
       return { name, url: req.url, targetId: existing.targetId };
     }
 
     // Create target at about:blank, attach and enable domains, then navigate.
-    // This avoids a race where loadEventFired has already fired before we listen.
+    // This avoids a race where the load event fires before we listen.
     const { targetId } = await cdp.Target.createTarget({ url: "about:blank" });
 
     const { sessionId } = await cdp.Target.attachToTarget({
@@ -80,13 +95,26 @@ export async function createCdpConnection(port: number): Promise<CdpBrowserServi
 
     if (req.url !== "about:blank") {
       await cdp.Page.navigate({ url: req.url }, sessionId);
-      await cdp.Page.loadEventFired(null, sessionId);
+      await waitForLoad(cdp, sessionId);
     }
 
     const page: ManagedPage = { name, targetId, sessionId, url: req.url };
     pages.set(name, page);
 
     return { name, url: req.url, targetId };
+  }
+
+  // Serialize navigations per name to prevent concurrent target creation races.
+  async function navigate(req: NavigateRequest): Promise<PageInfo> {
+    const name = req.name ?? "default";
+    const inflight = pending.get(name);
+    const task = (inflight ?? Promise.resolve()).then(() => doNavigate(req, name));
+    pending.set(name, task);
+    try {
+      return await task;
+    } finally {
+      if (pending.get(name) === task) pending.delete(name);
+    }
   }
 
   async function evaluate(req: EvalRequest): Promise<EvalResult> {

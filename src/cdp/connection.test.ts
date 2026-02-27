@@ -130,6 +130,39 @@ Deno.test("screenshot returns a valid png file path", async () => {
   }
 });
 
+Deno.test("navigate loads a real page and waits for load", async () => {
+  await setup();
+  try {
+    const url = "data:text/html,<h1>Hello</h1>";
+    const info = await browser.navigate({ url, name: "real" });
+    assertEquals(info.name, "real");
+    const result = await browser.evaluate({
+      name: "real",
+      expression: "document.querySelector('h1').textContent",
+    });
+    assertEquals(result.result, "Hello");
+  } finally {
+    await teardown();
+  }
+});
+
+Deno.test("concurrent navigates to same name do not leak targets", async () => {
+  await setup();
+  try {
+    const [a, b] = await Promise.all([
+      browser.navigate({ url: "about:blank", name: "dup" }),
+      browser.navigate({ url: "about:blank", name: "dup" }),
+    ]);
+    // Both should resolve to the same target (second reuses first)
+    assertEquals(a.targetId, b.targetId);
+    const pages = await browser.listPages();
+    const dups = pages.filter((p) => p.name === "dup");
+    assertEquals(dups.length, 1);
+  } finally {
+    await teardown();
+  }
+});
+
 Deno.test("evaluate throws for unknown page", async () => {
   await setup();
   try {

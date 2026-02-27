@@ -56,8 +56,10 @@ function findChromePath(): string {
         Deno.statSync(p);
         return p;
       }
-      // For non-absolute paths, just return the first candidate — Deno.Command will resolve via PATH
-      return p;
+      // Bare command name — verify it exists in PATH
+      const which = new Deno.Command("which", { args: [p], stdout: "null", stderr: "null" });
+      const { success } = which.outputSync();
+      if (success) return p;
     } catch {
       continue;
     }
