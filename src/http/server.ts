@@ -21,8 +21,8 @@ export interface ServerDeps {
 export interface Server {
   /** Send a synthetic request to the handler (for testing). */
   request(path: string, init?: RequestInit): Promise<Response>;
-  /** Start listening on given port and hostname. Returns the Deno.HttpServer for lifecycle. */
-  serve(options: { port: number; hostname: string }): Deno.HttpServer;
+  /** Start listening on 127.0.0.1. Returns the Deno.HttpServer for lifecycle. */
+  serve(options: { port: number }): Deno.HttpServer;
 }
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -38,10 +38,44 @@ function errorResponse(message: string, status: number): Response {
 
 async function readJson(req: Request): Promise<Record<string, unknown> | null> {
   try {
-    return (await req.json()) as Record<string, unknown>;
+    const parsed: unknown = await req.json();
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
+    return parsed as Record<string, unknown>;
   } catch {
     return null;
   }
+}
+
+function optionalString(
+  body: Record<string, unknown>,
+  field: string,
+): [string | undefined, Response | undefined] {
+  const val = body[field];
+  if (val === undefined || val === null) return [undefined, undefined];
+  if (typeof val !== "string") return [undefined, errorResponse(`${field} must be a string`, 400)];
+  return [val, undefined];
+}
+
+function optionalNumber(
+  body: Record<string, unknown>,
+  field: string,
+): [number | undefined, Response | undefined] {
+  const val = body[field];
+  if (val === undefined || val === null) return [undefined, undefined];
+  if (typeof val !== "number") return [undefined, errorResponse(`${field} must be a number`, 400)];
+  return [val, undefined];
+}
+
+function optionalBoolean(
+  body: Record<string, unknown>,
+  field: string,
+): [boolean | undefined, Response | undefined] {
+  const val = body[field];
+  if (val === undefined || val === null) return [undefined, undefined];
+  if (typeof val !== "boolean") {
+    return [undefined, errorResponse(`${field} must be a boolean`, 400)];
+  }
+  return [val, undefined];
 }
 
 type Route = {
@@ -71,10 +105,10 @@ export function createServer(deps: ServerDeps): Server {
         const body = await readJson(req);
         if (!body) return errorResponse("invalid JSON", 400);
         if (!body.url) return errorResponse("url is required", 400);
-        const result = await deps.navigate({
-          name: (body.name as string) ?? undefined,
-          url: body.url as string,
-        });
+        if (typeof body.url !== "string") return errorResponse("url must be a string", 400);
+        const [name, nameErr] = optionalString(body, "name");
+        if (nameErr) return nameErr;
+        const result = await deps.navigate({ name, url: body.url });
         return jsonResponse(result);
       },
     }],
@@ -89,14 +123,21 @@ export function createServer(deps: ServerDeps): Server {
       methods: ["POST"],
       handle: async (req) => {
         const body = await readJson(req);
-        const opts = body ?? {};
-        const options: SnapshotOptions = {
-          name: (opts.name as string) ?? "default",
-          maxDepth: opts.maxDepth as number | undefined,
-          maxNodes: opts.maxNodes as number | undefined,
-          selector: opts.selector as string | undefined,
-        };
-        const result = await deps.snapshot(options);
+        if (!body) return errorResponse("invalid JSON", 400);
+        const [name, nameErr] = optionalString(body, "name");
+        if (nameErr) return nameErr;
+        const [maxDepth, mdErr] = optionalNumber(body, "maxDepth");
+        if (mdErr) return mdErr;
+        const [maxNodes, mnErr] = optionalNumber(body, "maxNodes");
+        if (mnErr) return mnErr;
+        const [selector, selErr] = optionalString(body, "selector");
+        if (selErr) return selErr;
+        const result = await deps.snapshot({
+          name: name ?? "default",
+          maxDepth,
+          maxNodes,
+          selector,
+        });
         return jsonResponse(result);
       },
     }],
@@ -106,9 +147,14 @@ export function createServer(deps: ServerDeps): Server {
         const body = await readJson(req);
         if (!body) return errorResponse("invalid JSON", 400);
         if (!body.expression) return errorResponse("expression is required", 400);
+        if (typeof body.expression !== "string") {
+          return errorResponse("expression must be a string", 400);
+        }
+        const [name, nameErr] = optionalString(body, "name");
+        if (nameErr) return nameErr;
         const result = await deps.evaluate({
-          name: (body.name as string) ?? "default",
-          expression: body.expression as string,
+          name: name ?? "default",
+          expression: body.expression,
         });
         return jsonResponse(result);
       },
@@ -117,10 +163,12 @@ export function createServer(deps: ServerDeps): Server {
       methods: ["POST"],
       handle: async (req) => {
         const body = await readJson(req);
-        const opts = body ?? {};
-        const name = (opts.name as string) ?? "default";
-        const fullPage = opts.fullPage as boolean | undefined;
-        const filePath = await deps.screenshot(name, fullPage);
+        if (!body) return errorResponse("invalid JSON", 400);
+        const [name, nameErr] = optionalString(body, "name");
+        if (nameErr) return nameErr;
+        const [fullPage, fpErr] = optionalBoolean(body, "fullPage");
+        if (fpErr) return fpErr;
+        const filePath = await deps.screenshot(name ?? "default", fullPage);
         return jsonResponse({ path: filePath });
       },
     }],
@@ -161,8 +209,11 @@ export function createServer(deps: ServerDeps): Server {
       const url = path.startsWith("http") ? path : `http://localhost${path}`;
       return handler(new Request(url, init));
     },
-    serve(options: { port: number; hostname: string }): Deno.HttpServer {
-      httpServer = Deno.serve({ ...options, onListen: () => {} }, handler);
+    serve(options: { port: number }): Deno.HttpServer {
+      httpServer = Deno.serve(
+        { port: options.port, hostname: "127.0.0.1", onListen: () => {} },
+        handler,
+      );
       return httpServer;
     },
   };

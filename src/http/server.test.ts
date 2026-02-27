@@ -237,6 +237,106 @@ Deno.test("malformed JSON returns 400", async () => {
   assertEquals(await res.json(), { error: "invalid JSON" });
 });
 
+Deno.test("non-object JSON body returns 400", async () => {
+  const server = createServer(stubDeps());
+  for (const body of [[], "string", 42, true]) {
+    const res = await server.request("/snapshot", json(body));
+    assertEquals(res.status, 400, `body ${JSON.stringify(body)} should be rejected`);
+    assertEquals(await res.json(), { error: "invalid JSON" });
+  }
+});
+
+Deno.test("malformed JSON on /snapshot returns 400", async () => {
+  const server = createServer(stubDeps());
+  const res = await server.request("/snapshot", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: "not json",
+  });
+  assertEquals(res.status, 400);
+  assertEquals(await res.json(), { error: "invalid JSON" });
+});
+
+Deno.test("malformed JSON on /screenshot returns 400", async () => {
+  const server = createServer(stubDeps());
+  const res = await server.request("/screenshot", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: "not json",
+  });
+  assertEquals(res.status, 400);
+  assertEquals(await res.json(), { error: "invalid JSON" });
+});
+
+Deno.test("serve binds to loopback and handles requests", async () => {
+  const server = createServer(stubDeps());
+  const httpServer = server.serve({ port: 0 });
+  const addr = httpServer.addr as Deno.NetAddr;
+  assertEquals(addr.hostname, "127.0.0.1");
+  try {
+    const res = await fetch(`http://127.0.0.1:${addr.port}/health`);
+    assertEquals(res.status, 200);
+    const body = await res.json();
+    assertEquals(body.status, "ok");
+  } finally {
+    await httpServer.shutdown();
+  }
+});
+
+Deno.test("POST /shutdown stops the served instance", async () => {
+  const server = createServer(stubDeps());
+  const httpServer = server.serve({ port: 0 });
+  const addr = httpServer.addr as Deno.NetAddr;
+  const res = await fetch(`http://127.0.0.1:${addr.port}/shutdown`, { method: "POST" });
+  assertEquals(res.status, 200);
+  assertEquals(await res.json(), { ok: true });
+  await httpServer.finished;
+});
+
+// --- Type validation ---
+
+Deno.test("POST /pages rejects non-string url", async () => {
+  const server = createServer(stubDeps());
+  const res = await server.request("/pages", json({ url: 123 }));
+  assertEquals(res.status, 400);
+  assertEquals((await res.json()).error, "url must be a string");
+});
+
+Deno.test("POST /pages rejects non-string name", async () => {
+  const server = createServer(stubDeps());
+  const res = await server.request("/pages", json({ url: "https://example.com", name: 42 }));
+  assertEquals(res.status, 400);
+  assertEquals((await res.json()).error, "name must be a string");
+});
+
+Deno.test("POST /eval rejects non-string expression", async () => {
+  const server = createServer(stubDeps());
+  const res = await server.request("/eval", json({ expression: 123 }));
+  assertEquals(res.status, 400);
+  assertEquals((await res.json()).error, "expression must be a string");
+});
+
+Deno.test("POST /screenshot rejects non-boolean fullPage", async () => {
+  const server = createServer(stubDeps());
+  const res = await server.request("/screenshot", json({ fullPage: "false" }));
+  assertEquals(res.status, 400);
+  assertEquals((await res.json()).error, "fullPage must be a boolean");
+});
+
+Deno.test("POST /snapshot rejects non-number maxDepth", async () => {
+  const server = createServer(stubDeps());
+  const res = await server.request("/snapshot", json({ maxDepth: "deep" }));
+  assertEquals(res.status, 400);
+  assertEquals((await res.json()).error, "maxDepth must be a number");
+});
+
+Deno.test("POST /snapshot rejects non-string selector", async () => {
+  const server = createServer(stubDeps());
+  const res = await server.request("/snapshot", json({ selector: 42 }));
+  assertEquals(res.status, 400);
+  assertEquals((await res.json()).error, "selector must be a string");
+});
+
 Deno.test("POST /screenshot passes fullPage option", async () => {
   let receivedFullPage: boolean | undefined;
   const server = createServer(stubDeps({
