@@ -196,6 +196,15 @@ Deno.test("selector scopes to subtree", () => {
   assertStringIncludes(yaml, `paragraph "Include"`);
 });
 
+Deno.test("selector preserves semantic root element", () => {
+  const yaml = snapshot(
+    `<div><nav id="main-nav"><a href="/">Home</a></nav></div>`,
+    { selector: "#main-nav" },
+  );
+  assertStringIncludes(yaml, "navigation:");
+  assertStringIncludes(yaml, `link "Home"`);
+});
+
 Deno.test("empty document produces empty string", () => {
   const yaml = snapshot(``);
   assertEquals(yaml, "");
@@ -230,9 +239,9 @@ Deno.test("radio input gets radio role", () => {
   assertStringIncludes(yaml, `radio [ref=e1]`);
 });
 
-Deno.test("submit input gets button role", () => {
+Deno.test("submit input gets button role and value as name", () => {
   const yaml = snapshot(`<input type="submit" value="Send">`);
-  assertStringIncludes(yaml, `button [ref=e1]`);
+  assertStringIncludes(yaml, `button "Send" [ref=e1]`);
 });
 
 Deno.test("article gets article role", () => {

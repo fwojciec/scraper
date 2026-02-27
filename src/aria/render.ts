@@ -7,15 +7,19 @@ function formatAttrs(node: AriaNode): string {
   return parts.length > 0 ? ` [${parts.join(", ")}]` : "";
 }
 
+function escapeYamlName(s: string): string {
+  return s.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
 function renderNode(node: AriaNode, indent: number): string {
   const pad = " ".repeat(indent);
 
   // Text pseudo-node
   if (node.role === "text") {
-    return `${pad}- text "${node.name ?? ""}"`;
+    return `${pad}- text "${escapeYamlName(node.name ?? "")}"`;
   }
 
-  const name = node.name ? ` "${node.name}"` : "";
+  const name = node.name ? ` "${escapeYamlName(node.name)}"` : "";
   const attrs = formatAttrs(node);
   const hasChildren = node.children && node.children.length > 0;
 

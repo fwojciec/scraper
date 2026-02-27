@@ -147,6 +147,9 @@ function getAccessibleName(el: DomElement, role: string): string | undefined {
   if (role === "img") {
     return el.getAttribute("alt") || undefined;
   }
+  if (el.tagName === "INPUT" && role === "button") {
+    return el.getAttribute("value") || undefined;
+  }
   return undefined;
 }
 
@@ -258,5 +261,5 @@ export function buildAriaTree(root: DomElement, options?: TreeOptions): AriaNode
     maxNodes: options?.maxNodes ?? Infinity,
   };
   const maxDepth = options?.maxDepth ?? Infinity;
-  return buildChildren(root, 0, maxDepth, ctx);
+  return buildNode(root, 0, maxDepth, ctx);
 }

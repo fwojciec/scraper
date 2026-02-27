@@ -83,3 +83,13 @@ Deno.test("render level and ref together", () => {
   const yaml = renderYaml([{ role: "heading", name: "Nav", level: 2, ref: "e1" }]);
   assertStringIncludes(yaml, `- heading "Nav" [level=2, ref=e1]`);
 });
+
+Deno.test("render escapes double quotes in names", () => {
+  const yaml = renderYaml([{ role: "button", name: 'He said "hi"' }]);
+  assertStringIncludes(yaml, `- button "He said \\"hi\\""`);
+});
+
+Deno.test("render escapes backslashes in names", () => {
+  const yaml = renderYaml([{ role: "link", name: "C:\\Users\\file" }]);
+  assertStringIncludes(yaml, `- link "C:\\\\Users\\\\file"`);
+});
