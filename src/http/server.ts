@@ -38,7 +38,9 @@ function errorResponse(message: string, status: number): Response {
 
 async function readJson(req: Request): Promise<Record<string, unknown> | null> {
   try {
-    return (await req.json()) as Record<string, unknown>;
+    const parsed: unknown = await req.json();
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
+    return parsed as Record<string, unknown>;
   } catch {
     return null;
   }

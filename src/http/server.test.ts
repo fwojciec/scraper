@@ -237,6 +237,15 @@ Deno.test("malformed JSON returns 400", async () => {
   assertEquals(await res.json(), { error: "invalid JSON" });
 });
 
+Deno.test("non-object JSON body returns 400", async () => {
+  const server = createServer(stubDeps());
+  for (const body of [[], "string", 42, true]) {
+    const res = await server.request("/snapshot", json(body));
+    assertEquals(res.status, 400, `body ${JSON.stringify(body)} should be rejected`);
+    assertEquals(await res.json(), { error: "invalid JSON" });
+  }
+});
+
 Deno.test("malformed JSON on /snapshot returns 400", async () => {
   const server = createServer(stubDeps());
   const res = await server.request("/snapshot", {
