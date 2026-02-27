@@ -98,3 +98,8 @@ Deno.test("render escapes newlines and tabs in names", () => {
   const yaml = renderYaml([{ role: "button", name: "a\nb\r\tc" }]);
   assertStringIncludes(yaml, `- button "a\\nb\\r\\tc"`);
 });
+
+Deno.test("render escapes remaining C0 control characters", () => {
+  const yaml = renderYaml([{ role: "button", name: "a\fb\x1bc" }]);
+  assertStringIncludes(yaml, `- button "a\\x0cb\\x1bc"`);
+});

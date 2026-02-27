@@ -13,7 +13,12 @@ function escapeYamlName(s: string): string {
     .replace(/"/g, '\\"')
     .replace(/\n/g, "\\n")
     .replace(/\r/g, "\\r")
-    .replace(/\t/g, "\\t");
+    .replace(/\t/g, "\\t")
+    // deno-lint-ignore no-control-regex
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, (ch) => {
+      const hex = ch.charCodeAt(0).toString(16).padStart(2, "0");
+      return `\\x${hex}`;
+    });
 }
 
 function renderNode(node: AriaNode, indent: number): string {
