@@ -9,20 +9,18 @@ Ben Johnson's standard package layout adapted for TypeScript/Deno.
 
 ### Dependency rule (NEVER violate)
 
-- `src/domain/` imports NOTHING from this project. Zero imports. Pure types and interfaces.
-- `src/app/` imports ONLY from `domain/`.
-- Adapter packages (`cdp/`, `aria/`, `http/`, `cli/`) import from `domain/` and (for `http/`)
-  `app/`.
+- `src/domain/` is the functional core: pure types, interfaces, and pure functions. Zero I/O, zero
+  side effects, imports NOTHING from other `src/` modules.
+- Adapter packages (`cdp/`, `aria/`, `http/`, `cli/`) are the imperative shell. Each imports only
+  from `domain/`.
 - Adapters NEVER import from other adapters.
-- `src/main.ts` imports from adapters and wires everything together.
-- `cli/` is a stateless HTTP client — it talks to the daemon via fetch, never imports `app/`.
+- `src/main.ts` is the composition root — imports from all adapters and wires them together.
 
 Enforced by `deno task lint:deps` using `deno info --json`. Violations are build failures.
 
 ### File patterns
 
-- Domain types: `src/domain/<concept>.ts` — pure interfaces and type aliases
-- Use cases: `src/app/<verb>-<noun>.ts` exporting `create<VerbNoun>UseCase(deps)`
+- Domain: `src/domain/<concept>.ts` — types, interfaces, and pure orchestration functions
 - Adapters: `src/<dependency-name>/<implementation>.ts`
 - Tests: co-located as `<filename>.test.ts`
 - Integration tests: `tests/integration/` with local HTML fixtures

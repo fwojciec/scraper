@@ -3,24 +3,22 @@
  *
  * Rules:
  * - domain/ may import nothing from src/
- * - app/ may import only from domain/
  * - cdp/ may import only from domain/
  * - aria/ may import only from domain/
- * - http/ may import from domain/ and app/
+ * - http/ may import only from domain/
  * - cli/ may import only from domain/
  * - Only main.ts may import from all modules
  */
 
-const SRC_MODULES = ["domain", "app", "cdp", "aria", "http", "cli"] as const;
+const SRC_MODULES = ["domain", "cdp", "aria", "http", "cli"] as const;
 
 type Module = (typeof SRC_MODULES)[number];
 
 const ALLOWED_IMPORTS: Record<Module, readonly Module[]> = {
   domain: [],
-  app: ["domain"],
   cdp: ["domain"],
   aria: ["domain"],
-  http: ["domain", "app"],
+  http: ["domain"],
   cli: ["domain"],
 };
 

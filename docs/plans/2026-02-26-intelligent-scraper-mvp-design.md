@@ -197,29 +197,20 @@ conflict resolution, full W3C name computation with label-for association.
 
 ## Project Structure
 
-Ben Johnson's standard package layout: domain types at root with zero deps, adapters named after the
-dependency they wrap, use-case layer for orchestration, thin composition root.
+Functional core / imperative shell. Domain is the functional core (pure types, interfaces, and pure
+orchestration functions with zero I/O). Adapters are the imperative shell, each wrapping one
+external dependency. Composition root wires them together.
 
 ```
 scraper/
 ├── deno.json
 ├── CLAUDE.md
 ├── src/
-│   ├── domain/                  # LAYER 0: Pure types + interfaces. Zero imports.
+│   ├── domain/                  # Functional core. Zero I/O. Zero side effects.
 │   │   ├── page.ts              # Page, PageInfo, NavigateRequest
 │   │   ├── eval.ts              # EvalRequest, EvalResult
-│   │   ├── browser.ts           # BrowserService interface (navigate, eval, screenshot)
-│   │   ├── snapshot.ts          # SnapshotService interface, SnapshotOptions
-│   │   └── mod.ts
-│   │
-│   ├── app/                     # LAYER 1: Use cases. Imports only from domain/.
-│   │   ├── navigate-page.ts     # NavigatePage use case
-│   │   ├── navigate-page.test.ts
-│   │   ├── snapshot-page.ts     # SnapshotPage use case
-│   │   ├── snapshot-page.test.ts
-│   │   ├── eval-page.ts         # EvalInPage use case
-│   │   ├── eval-page.test.ts
-│   │   ├── screenshot-page.ts   # ScreenshotPage use case
+│   │   ├── browser.ts           # BrowserService, SnapshotService interfaces
+│   │   ├── snapshot.ts          # SnapshotOptions, SnapshotResult, pure orchestration
 │   │   └── mod.ts
 │   │
 │   ├── cdp/                     # ADAPTER: Wraps Chrome DevTools Protocol
@@ -237,7 +228,7 @@ scraper/
 │   │   └── mod.ts
 │   │
 │   ├── http/                    # ADAPTER: Wraps Deno.serve
-│   │   ├── server.ts            # Routes → delegates to app/ use cases
+│   │   ├── server.ts            # Routes, receives wired deps from main.ts
 │   │   ├── server.test.ts
 │   │   └── mod.ts
 │   │
@@ -246,7 +237,7 @@ scraper/
 │   │   ├── commands.test.ts
 │   │   └── mod.ts
 │   │
-│   └── main.ts                  # Composition root: wires adapters → app → domain
+│   └── main.ts                  # Composition root: wires adapters → domain
 │
 └── tests/
     └── integration/
@@ -259,22 +250,21 @@ scraper/
         └── eval.integration.test.ts
 ```
 
-Dependency flow (strictly inward, no adapter-to-adapter):
+Dependency flow (strictly inward, uniform rules, no exceptions):
 
 ```
 domain/    ──> (nothing)
-app/       ──> domain/
 cdp/       ──> domain/
 aria/      ──> domain/
-http/      ──> domain/, app/
-cli/       ──> domain/          (stateless HTTP client to daemon; no app/ import)
+http/      ──> domain/
+cli/       ──> domain/
 main.ts    ──> everything (wiring only)
 ```
 
-Key constraint: `http/` depends on `app/` use cases and `domain/` interfaces — never on `cdp/` or
-`aria/` directly. `cli/` is a pure HTTP client that talks to the daemon over `fetch()` — it depends
-only on `domain/` types for request/response shapes. `main.ts` is the only place that knows about
-all concrete adapters and wires them together.
+Every adapter has the same rule: import only from `domain/`. No adapter imports another adapter.
+`main.ts` is the only place that knows about all concrete adapters and wires them together. `http/`
+receives its wired dependencies (navigate, eval, snapshot functions) from `main.ts` via constructor
+injection.
 
 **Enforcement:** A `deno task lint:deps` Deno script that uses `deno info --json` to resolve the
 full module graph for each adapter's `mod.ts`, then asserts no illegal cross-adapter imports exist.
@@ -282,9 +272,7 @@ This uses Deno's own module resolution — handles re-exports, barrel files, dyn
 aliases correctly. The rules:
 
 - `domain/` may import nothing from `src/`
-- `app/` may import only from `domain/`
-- Each adapter (`cdp/`, `aria/`, `http/`, `cli/`) may import from `domain/` and (for `http/`) `app/`
-  — never from other adapters
+- Each adapter (`cdp/`, `aria/`, `http/`, `cli/`) may import only from `domain/`
 - Only `main.ts` may import from all modules
 
 The script lives at `scripts/lint-deps.ts`, runs in CI, and is encoded in `CLAUDE.md` as a hard
@@ -349,15 +337,15 @@ Chrome). Visibility and layout-dependent tests require real Chrome.
 
 ### Layer 2: HTTP + CLI — request/response tests
 
-Mock at the app/ use-case boundary. Test that routes dispatch correctly, that the CLI formats output
-properly.
+Mock at the domain interface boundary. The HTTP server receives its dependencies as functions — test
+with inline mocks.
 
 ```ts
 Deno.test("POST /eval returns result", async () => {
   const server = createServer({
-    evalPage: { execute: async () => ({ result: { title: "Test" } }) },
-    navigatePage: { execute: async () => ({ name: "default", url: "..." }) },
-    snapshotPage: { execute: async () => ({ yaml: "..." }) },
+    evaluate: async () => ({ result: { title: "Test" } }),
+    navigate: async () => ({ name: "default", url: "...", targetId: "t1" }),
+    snapshot: async () => ({ yaml: "- heading" }),
   });
   const res = await server.request("/eval", {
     method: "POST",
@@ -419,12 +407,12 @@ Deno.test({
 });
 ```
 
-| Layer            | What                                           | DOM source            | Speed    |
-| ---------------- | ---------------------------------------------- | --------------------- | -------- |
-| ARIA unit        | Role mapping, name computation, YAML rendering | `deno-dom`            | ~ms      |
-| HTTP/CLI unit    | Request routing, output formatting             | Mock app/ use cases   | ~ms      |
-| Integration      | Full pipeline against local fixtures           | Real Chrome           | ~seconds |
-| Smoke (optional) | Sanity check against live sites                | Real Chrome + network | ~seconds |
+| Layer            | What                                           | DOM source             | Speed    |
+| ---------------- | ---------------------------------------------- | ---------------------- | -------- |
+| ARIA unit        | Role mapping, name computation, YAML rendering | `deno-dom`             | ~ms      |
+| HTTP/CLI unit    | Request routing, output formatting             | Mock domain interfaces | ~ms      |
+| Integration      | Full pipeline against local fixtures           | Real Chrome            | ~seconds |
+| Smoke (optional) | Sanity check against live sites                | Real Chrome + network  | ~seconds |
 
 ## Example LLM Session
 
