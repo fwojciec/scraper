@@ -284,6 +284,50 @@ Deno.test("POST /shutdown stops the served instance", async () => {
   await httpServer.finished;
 });
 
+// --- Type validation ---
+
+Deno.test("POST /pages rejects non-string url", async () => {
+  const server = createServer(stubDeps());
+  const res = await server.request("/pages", json({ url: 123 }));
+  assertEquals(res.status, 400);
+  assertEquals((await res.json()).error, "url must be a string");
+});
+
+Deno.test("POST /pages rejects non-string name", async () => {
+  const server = createServer(stubDeps());
+  const res = await server.request("/pages", json({ url: "https://example.com", name: 42 }));
+  assertEquals(res.status, 400);
+  assertEquals((await res.json()).error, "name must be a string");
+});
+
+Deno.test("POST /eval rejects non-string expression", async () => {
+  const server = createServer(stubDeps());
+  const res = await server.request("/eval", json({ expression: 123 }));
+  assertEquals(res.status, 400);
+  assertEquals((await res.json()).error, "expression must be a string");
+});
+
+Deno.test("POST /screenshot rejects non-boolean fullPage", async () => {
+  const server = createServer(stubDeps());
+  const res = await server.request("/screenshot", json({ fullPage: "false" }));
+  assertEquals(res.status, 400);
+  assertEquals((await res.json()).error, "fullPage must be a boolean");
+});
+
+Deno.test("POST /snapshot rejects non-number maxDepth", async () => {
+  const server = createServer(stubDeps());
+  const res = await server.request("/snapshot", json({ maxDepth: "deep" }));
+  assertEquals(res.status, 400);
+  assertEquals((await res.json()).error, "maxDepth must be a number");
+});
+
+Deno.test("POST /snapshot rejects non-string selector", async () => {
+  const server = createServer(stubDeps());
+  const res = await server.request("/snapshot", json({ selector: 42 }));
+  assertEquals(res.status, 400);
+  assertEquals((await res.json()).error, "selector must be a string");
+});
+
 Deno.test("POST /screenshot passes fullPage option", async () => {
   let receivedFullPage: boolean | undefined;
   const server = createServer(stubDeps({

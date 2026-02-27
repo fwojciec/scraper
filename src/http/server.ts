@@ -44,6 +44,38 @@ async function readJson(req: Request): Promise<Record<string, unknown> | null> {
   }
 }
 
+function optionalString(
+  body: Record<string, unknown>,
+  field: string,
+): [string | undefined, Response | undefined] {
+  const val = body[field];
+  if (val === undefined || val === null) return [undefined, undefined];
+  if (typeof val !== "string") return [undefined, errorResponse(`${field} must be a string`, 400)];
+  return [val, undefined];
+}
+
+function optionalNumber(
+  body: Record<string, unknown>,
+  field: string,
+): [number | undefined, Response | undefined] {
+  const val = body[field];
+  if (val === undefined || val === null) return [undefined, undefined];
+  if (typeof val !== "number") return [undefined, errorResponse(`${field} must be a number`, 400)];
+  return [val, undefined];
+}
+
+function optionalBoolean(
+  body: Record<string, unknown>,
+  field: string,
+): [boolean | undefined, Response | undefined] {
+  const val = body[field];
+  if (val === undefined || val === null) return [undefined, undefined];
+  if (typeof val !== "boolean") {
+    return [undefined, errorResponse(`${field} must be a boolean`, 400)];
+  }
+  return [val, undefined];
+}
+
 type Route = {
   methods: string[];
   handle: (req: Request, match: RegExpExecArray) => Response | Promise<Response>;
@@ -71,10 +103,10 @@ export function createServer(deps: ServerDeps): Server {
         const body = await readJson(req);
         if (!body) return errorResponse("invalid JSON", 400);
         if (!body.url) return errorResponse("url is required", 400);
-        const result = await deps.navigate({
-          name: (body.name as string) ?? undefined,
-          url: body.url as string,
-        });
+        if (typeof body.url !== "string") return errorResponse("url must be a string", 400);
+        const [name, nameErr] = optionalString(body, "name");
+        if (nameErr) return nameErr;
+        const result = await deps.navigate({ name, url: body.url });
         return jsonResponse(result);
       },
     }],
@@ -90,13 +122,20 @@ export function createServer(deps: ServerDeps): Server {
       handle: async (req) => {
         const body = await readJson(req);
         if (!body) return errorResponse("invalid JSON", 400);
-        const options: SnapshotOptions = {
-          name: (body.name as string) ?? "default",
-          maxDepth: body.maxDepth as number | undefined,
-          maxNodes: body.maxNodes as number | undefined,
-          selector: body.selector as string | undefined,
-        };
-        const result = await deps.snapshot(options);
+        const [name, nameErr] = optionalString(body, "name");
+        if (nameErr) return nameErr;
+        const [maxDepth, mdErr] = optionalNumber(body, "maxDepth");
+        if (mdErr) return mdErr;
+        const [maxNodes, mnErr] = optionalNumber(body, "maxNodes");
+        if (mnErr) return mnErr;
+        const [selector, selErr] = optionalString(body, "selector");
+        if (selErr) return selErr;
+        const result = await deps.snapshot({
+          name: name ?? "default",
+          maxDepth,
+          maxNodes,
+          selector,
+        });
         return jsonResponse(result);
       },
     }],
@@ -106,9 +145,14 @@ export function createServer(deps: ServerDeps): Server {
         const body = await readJson(req);
         if (!body) return errorResponse("invalid JSON", 400);
         if (!body.expression) return errorResponse("expression is required", 400);
+        if (typeof body.expression !== "string") {
+          return errorResponse("expression must be a string", 400);
+        }
+        const [name, nameErr] = optionalString(body, "name");
+        if (nameErr) return nameErr;
         const result = await deps.evaluate({
-          name: (body.name as string) ?? "default",
-          expression: body.expression as string,
+          name: name ?? "default",
+          expression: body.expression,
         });
         return jsonResponse(result);
       },
@@ -118,9 +162,11 @@ export function createServer(deps: ServerDeps): Server {
       handle: async (req) => {
         const body = await readJson(req);
         if (!body) return errorResponse("invalid JSON", 400);
-        const name = (body.name as string) ?? "default";
-        const fullPage = body.fullPage as boolean | undefined;
-        const filePath = await deps.screenshot(name, fullPage);
+        const [name, nameErr] = optionalString(body, "name");
+        if (nameErr) return nameErr;
+        const [fullPage, fpErr] = optionalBoolean(body, "fullPage");
+        if (fpErr) return fpErr;
+        const filePath = await deps.screenshot(name ?? "default", fullPage);
         return jsonResponse({ path: filePath });
       },
     }],
