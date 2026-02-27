@@ -2,14 +2,21 @@
 
 ## Problem
 
-LLM agents need to extract structured data from web pages without flooding their context window with raw HTML. Existing scraping tools are point-and-shoot — they dump markdown or JSON from a URL. We need a tool that lets an LLM surgically query a page: orient via a compact structural representation, then execute targeted extraction logic.
+LLM agents need to extract structured data from web pages without flooding their context window with
+raw HTML. Existing scraping tools are point-and-shoot — they dump markdown or JSON from a URL. We
+need a tool that lets an LLM surgically query a page: orient via a compact structural
+representation, then execute targeted extraction logic.
 
 ## Design Principles
 
-1. **The LLM writes the extraction logic.** Like SQL for a database, the LLM writes JS expressions that run against the live DOM. The tool executes them deterministically.
-2. **Compact page representation.** ARIA accessibility tree (YAML) instead of raw HTML — ~50x smaller, semantically meaningful, sufficient for the LLM to orient and write accurate selectors.
-3. **Persistent browser state.** Pages stay alive between CLI calls. JS-rendered content, auth cookies, and DOM state survive across invocations.
-4. **Zero high-level abstractions.** Raw CDP over WebSocket, not Playwright or Puppeteer. Deno's native APIs are sufficient.
+1. **The LLM writes the extraction logic.** Like SQL for a database, the LLM writes JS expressions
+   that run against the live DOM. The tool executes them deterministically.
+2. **Compact page representation.** ARIA accessibility tree (YAML) instead of raw HTML — ~50x
+   smaller, semantically meaningful, sufficient for the LLM to orient and write accurate selectors.
+3. **Persistent browser state.** Pages stay alive between CLI calls. JS-rendered content, auth
+   cookies, and DOM state survive across invocations.
+4. **Zero high-level abstractions.** Raw CDP over WebSocket, not Playwright or Puppeteer. Deno's
+   native APIs are sufficient.
 
 ## Architecture
 
@@ -36,13 +43,20 @@ CLI (stateless)          Daemon (Deno.serve)           Chrome (headless)
   │<── JSON ────────────────│                              │
 ```
 
-**Daemon** (`scraper start`): Picks a free CDP port by binding a temporary TCP listener to `:0`, reading the assigned port, then closing the listener before launching Chrome with `--remote-debugging-port=<that port>`. Discovers Chrome's WebSocket URL via `http://127.0.0.1:<cdpPort>/json/version` (with retry, since Chrome takes a moment to start). Connects via CDP using `simple-cdp` from JSR, maintains a registry of named pages, serves an HTTP API on `127.0.0.1:3222`. The CDP port is recorded in the PID file but never exposed to the CLI.
+**Daemon** (`scraper start`): Picks a free CDP port by binding a temporary TCP listener to `:0`,
+reading the assigned port, then closing the listener before launching Chrome with
+`--remote-debugging-port=<that port>`. Discovers Chrome's WebSocket URL via
+`http://127.0.0.1:<cdpPort>/json/version` (with retry, since Chrome takes a moment to start).
+Connects via CDP using `simple-cdp` from JSR, maintains a registry of named pages, serves an HTTP
+API on `127.0.0.1:3222`. The CDP port is recorded in the PID file but never exposed to the CLI.
 
-**CLI** (`scraper <command>`): Stateless client. Each command is one `fetch()` to the daemon API, result printed to stdout. The LLM calls these via bash.
+**CLI** (`scraper <command>`): Stateless client. Each command is one `fetch()` to the daemon API,
+result printed to stdout. The LLM calls these via bash.
 
 ### Security
 
-The daemon binds to `127.0.0.1` only (loopback). `/eval` executes arbitrary JS in the browser context — this is the core design, not a bug. But since the browser may hold authenticated sessions:
+The daemon binds to `127.0.0.1` only (loopback). `/eval` executes arbitrary JS in the browser
+context — this is the core design, not a bug. But since the browser may hold authenticated sessions:
 
 - Loopback-only binding (no `0.0.0.0`)
 - Eval timeout: 30s default, configurable via `--eval-timeout`
@@ -50,11 +64,19 @@ The daemon binds to `127.0.0.1` only (loopback). `/eval` executes arbitrary JS i
 
 ### Daemon Lifecycle
 
-`scraper start` writes a PID file to `~/.scraper/daemon.pid` containing `{ pid, port, cdpPort }`. `scraper stop` reads the PID file, sends `POST /shutdown` to the daemon, falls back to `SIGTERM` if the HTTP call fails, then cleans up the PID file. All other CLI commands read the PID file to discover the daemon port — no hardcoded defaults.
+`scraper start` writes a PID file to `~/.scraper/daemon.pid` containing `{ pid, port, cdpPort }`.
+`scraper stop` reads the PID file, sends `POST /shutdown` to the daemon, falls back to `SIGTERM` if
+the HTTP call fails, then cleans up the PID file. All other CLI commands read the PID file to
+discover the daemon port — no hardcoded defaults.
 
-**Stale PID recovery:** On `scraper start`, if a PID file exists, check if the process is alive (`Deno.kill(pid, 0)` or equivalent). If dead, clean up the stale PID file and start fresh. If alive, print the existing daemon's info and exit.
+**Stale PID recovery:** On `scraper start`, if a PID file exists, check if the process is alive
+(`Deno.kill(pid, 0)` or equivalent). If dead, clean up the stale PID file and start fresh. If alive,
+print the existing daemon's info and exit.
 
-**CDP port:** Allocated dynamically (ephemeral port) rather than hardcoded to 9222, to avoid collisions. The daemon discovers Chrome's WebSocket URL via `http://127.0.0.1:<cdpPort>/json/version` after launch. The chosen CDP port is recorded in the PID file but never exposed to the CLI.
+**CDP port:** Allocated dynamically (ephemeral port) rather than hardcoded to 9222, to avoid
+collisions. The daemon discovers Chrome's WebSocket URL via
+`http://127.0.0.1:<cdpPort>/json/version` after launch. The chosen CDP port is recorded in the PID
+file but never exposed to the CLI.
 
 ## CLI Commands
 
@@ -69,6 +91,7 @@ scraper screenshot [--name default] [--full-page]
 ```
 
 Output conventions:
+
 - `snapshot` prints raw YAML to stdout (pipeable, readable by LLM)
 - `eval` prints JSON to stdout
 - `screenshot` prints the file path to stdout
@@ -77,16 +100,16 @@ Output conventions:
 
 ## HTTP API
 
-| Method | Path | Body | Returns |
-|--------|------|------|---------|
-| `GET` | `/health` | — | `{ status: "ok", pages: [...] }` |
-| `POST` | `/pages` | `{ name, url }` | `{ name, targetId, url }` |
-| `DELETE` | `/pages/:name` | — | `{ ok: true }` |
-| `GET` | `/pages` | — | `[{ name, url, targetId }]` |
-| `POST` | `/snapshot` | `{ name, maxDepth?, maxNodes?, selector? }` | `{ yaml: "..." }` |
-| `POST` | `/eval` | `{ name, expression }` | `{ result: ... }` |
-| `POST` | `/shutdown` | — | `{ ok: true }` — graceful shutdown |
-| `POST` | `/screenshot` | `{ name }` | `{ path: "/tmp/..." }` |
+| Method   | Path           | Body                                        | Returns                            |
+| -------- | -------------- | ------------------------------------------- | ---------------------------------- |
+| `GET`    | `/health`      | —                                           | `{ status: "ok", pages: [...] }`   |
+| `POST`   | `/pages`       | `{ name, url }`                             | `{ name, targetId, url }`          |
+| `DELETE` | `/pages/:name` | —                                           | `{ ok: true }`                     |
+| `GET`    | `/pages`       | —                                           | `[{ name, url, targetId }]`        |
+| `POST`   | `/snapshot`    | `{ name, maxDepth?, maxNodes?, selector? }` | `{ yaml: "..." }`                  |
+| `POST`   | `/eval`        | `{ name, expression }`                      | `{ result: ... }`                  |
+| `POST`   | `/shutdown`    | —                                           | `{ ok: true }` — graceful shutdown |
+| `POST`   | `/screenshot`  | `{ name }`                                  | `{ path: "/tmp/..." }`             |
 
 - Page `name` defaults to `"default"` if omitted
 - `eval` uses `returnByValue: true` — returns JSON, not CDP remote object refs
@@ -100,18 +123,18 @@ The snapshot converts a live DOM into a compact YAML accessibility tree:
 
 ```yaml
 - banner:
-  - navigation:
-    - link "Home" [ref=e1]
+    - navigation:
+        - link "Home" [ref=e1]
 - main:
-  - table:
-    - row:
-      - columnheader "Rank"
-      - columnheader "Title"
-    - row:
-      - cell "1"
-      - cell:
-        - link "Some Book Title" [ref=e15]
-      - cell "Author Name"
+    - table:
+        - row:
+            - columnheader "Rank"
+            - columnheader "Title"
+        - row:
+            - cell "1"
+            - cell:
+                - link "Some Book Title" [ref=e15]
+            - cell "Author Name"
 ```
 
 ### What is preserved
@@ -136,9 +159,12 @@ The snapshot converts a live DOM into a compact YAML accessibility tree:
 
 ### Implementation
 
-The engine is a JS string injected into the browser context via `Runtime.evaluate`. It runs entirely in-browser, returns a YAML string. The script is injected lazily on first `/snapshot` call per page and cached in the page's global scope (same pattern as dev-browser).
+The engine is a JS string injected into the browser context via `Runtime.evaluate`. It runs entirely
+in-browser, returns a YAML string. The script is injected lazily on first `/snapshot` call per page
+and cached in the page's global scope (same pattern as dev-browser).
 
 The algorithm:
+
 1. Walk DOM depth-first from `document.body`, handling shadow roots and slots
 2. For each element: check visibility, compute ARIA role, compute accessible name
 3. Build an AriaNode tree with role, name, states, children
@@ -149,23 +175,30 @@ The algorithm:
 ### Snapshot controls
 
 To keep output bounded for large pages:
+
 - `--selector "css"` — snapshot a subtree instead of full `document.body`
 - `--max-depth N` — stop descending after N levels
 - `--max-nodes N` — stop after N nodes emitted
 
 ### Phased implementation
 
-The full ARIA spec is large. We implement test-first in phases, each gated by passing tests extracted from dev-browser's behavior:
+The full ARIA spec is large. We implement test-first in phases, each gated by passing tests
+extracted from dev-browser's behavior:
 
-**Phase 1 (blocks end-to-end):** DOM walk, visibility, implicit role mapping for common HTML elements, text content as accessible name, refs on interactable elements, YAML rendering. This is enough to snapshot Publishers Weekly's bestseller table.
+**Phase 1 (blocks end-to-end):** DOM walk, visibility, implicit role mapping for common HTML
+elements, text content as accessible name, refs on interactable elements, YAML rendering. This is
+enough to snapshot Publishers Weekly's bestseller table.
 
-**Phase 2 (blocks Salesforce):** Shadow DOM traversal, slot assignments, `aria-label`/`aria-labelledby` name computation, ARIA states (checked, expanded, disabled, etc.).
+**Phase 2 (blocks Salesforce):** Shadow DOM traversal, slot assignments,
+`aria-label`/`aria-labelledby` name computation, ARIA states (checked, expanded, disabled, etc.).
 
-**Phase 3 (completeness):** `aria-owns` reparenting, CSS `::before`/`::after` content, presentation conflict resolution, full W3C name computation with label-for association.
+**Phase 3 (completeness):** `aria-owns` reparenting, CSS `::before`/`::after` content, presentation
+conflict resolution, full W3C name computation with label-for association.
 
 ## Project Structure
 
-Ben Johnson's standard package layout: domain types at root with zero deps, adapters named after the dependency they wrap, use-case layer for orchestration, thin composition root.
+Ben Johnson's standard package layout: domain types at root with zero deps, adapters named after the
+dependency they wrap, use-case layer for orchestration, thin composition root.
 
 ```
 scraper/
@@ -227,6 +260,7 @@ scraper/
 ```
 
 Dependency flow (strictly inward, no adapter-to-adapter):
+
 ```
 domain/    ──> (nothing)
 app/       ──> domain/
@@ -237,16 +271,24 @@ cli/       ──> domain/          (stateless HTTP client to daemon; no app/ im
 main.ts    ──> everything (wiring only)
 ```
 
-Key constraint: `http/` depends on `app/` use cases and `domain/` interfaces — never on `cdp/` or `aria/` directly. `cli/` is a pure HTTP client that talks to the daemon over `fetch()` — it depends only on `domain/` types for request/response shapes. `main.ts` is the only place that knows about all concrete adapters and wires them together.
+Key constraint: `http/` depends on `app/` use cases and `domain/` interfaces — never on `cdp/` or
+`aria/` directly. `cli/` is a pure HTTP client that talks to the daemon over `fetch()` — it depends
+only on `domain/` types for request/response shapes. `main.ts` is the only place that knows about
+all concrete adapters and wires them together.
 
-**Enforcement:** A `deno task lint:deps` Deno script that uses `deno info --json` to resolve the full module graph for each adapter's `mod.ts`, then asserts no illegal cross-adapter imports exist. This uses Deno's own module resolution — handles re-exports, barrel files, dynamic imports, and path aliases correctly. The rules:
+**Enforcement:** A `deno task lint:deps` Deno script that uses `deno info --json` to resolve the
+full module graph for each adapter's `mod.ts`, then asserts no illegal cross-adapter imports exist.
+This uses Deno's own module resolution — handles re-exports, barrel files, dynamic imports, and path
+aliases correctly. The rules:
 
 - `domain/` may import nothing from `src/`
 - `app/` may import only from `domain/`
-- Each adapter (`cdp/`, `aria/`, `http/`, `cli/`) may import from `domain/` and (for `http/`) `app/` — never from other adapters
+- Each adapter (`cdp/`, `aria/`, `http/`, `cli/`) may import from `domain/` and (for `http/`) `app/`
+  — never from other adapters
 - Only `main.ts` may import from all modules
 
-The script lives at `scripts/lint-deps.ts`, runs in CI, and is encoded in `CLAUDE.md` as a hard rule. Violations are build failures, not warnings.
+The script lives at `scripts/lint-deps.ts`, runs in CI, and is encoded in `CLAUDE.md` as a hard
+rule. Violations are build failures, not warnings.
 
 ## Test Strategy
 
@@ -254,7 +296,8 @@ Three layers, each testing a different concern.
 
 ### Layer 1: ARIA snapshot — behavioral tests from dev-browser
 
-Study dev-browser's snapshot engine, run it against known HTML inputs, capture output. That output becomes our test assertions. Our implementation must produce equivalent results.
+Study dev-browser's snapshot engine, run it against known HTML inputs, capture output. That output
+becomes our test assertions. Our implementation must produce equivalent results.
 
 ```ts
 Deno.test("link with href gets role and ref", () => {
@@ -301,11 +344,13 @@ Deno.test("aria-label overrides text content", () => {
 });
 ```
 
-**DOM for unit tests:** `deno-dom` for role mapping, name computation, YAML rendering (fast, no Chrome). Visibility and layout-dependent tests require real Chrome.
+**DOM for unit tests:** `deno-dom` for role mapping, name computation, YAML rendering (fast, no
+Chrome). Visibility and layout-dependent tests require real Chrome.
 
 ### Layer 2: HTTP + CLI — request/response tests
 
-Mock at the app/ use-case boundary. Test that routes dispatch correctly, that the CLI formats output properly.
+Mock at the app/ use-case boundary. Test that routes dispatch correctly, that the CLI formats output
+properly.
 
 ```ts
 Deno.test("POST /eval returns result", async () => {
@@ -324,7 +369,8 @@ Deno.test("POST /eval returns result", async () => {
 
 ### Layer 3: Integration — real Chrome, local fixtures
 
-Integration tests use a local HTTP server serving HTML fixture files. This keeps tests deterministic and fast — no network dependency, no flaky third-party pages.
+Integration tests use a local HTTP server serving HTML fixture files. This keeps tests deterministic
+and fast — no network dependency, no flaky third-party pages.
 
 ```ts
 // tests/integration/fixture-server.ts
@@ -340,7 +386,9 @@ Deno.test("extract bestseller list from fixture", async () => {
     const snapshot = await cli("snapshot");
     assertStringIncludes(snapshot, "table:");
 
-    const books = await cli("eval", `
+    const books = await cli(
+      "eval",
+      `
       [...document.querySelectorAll("tr")]
         .filter(r => r.querySelector("td"))
         .slice(0, 5)
@@ -348,7 +396,8 @@ Deno.test("extract bestseller list from fixture", async () => {
           rank: r.cells[0]?.textContent?.trim(),
           title: r.querySelector("a")?.textContent?.trim()
         }))
-    `);
+    `,
+    );
     const parsed = JSON.parse(books);
     assertEquals(parsed.length, 5);
     assert(parsed[0].rank);
@@ -366,16 +415,16 @@ One optional live smoke test (skipped in CI, run manually):
 Deno.test({
   name: "smoke: Publishers Weekly live",
   ignore: Deno.env.get("CI") === "true",
-  fn: async () => { /* ... real URL ... */ },
+  fn: async () => {/* ... real URL ... */},
 });
 ```
 
-| Layer | What | DOM source | Speed |
-|-------|------|-----------|-------|
-| ARIA unit | Role mapping, name computation, YAML rendering | `deno-dom` | ~ms |
-| HTTP/CLI unit | Request routing, output formatting | Mock app/ use cases | ~ms |
-| Integration | Full pipeline against local fixtures | Real Chrome | ~seconds |
-| Smoke (optional) | Sanity check against live sites | Real Chrome + network | ~seconds |
+| Layer            | What                                           | DOM source            | Speed    |
+| ---------------- | ---------------------------------------------- | --------------------- | -------- |
+| ARIA unit        | Role mapping, name computation, YAML rendering | `deno-dom`            | ~ms      |
+| HTTP/CLI unit    | Request routing, output formatting             | Mock app/ use cases   | ~ms      |
+| Integration      | Full pipeline against local fixtures           | Real Chrome           | ~seconds |
+| Smoke (optional) | Sanity check against live sites                | Real Chrome + network | ~seconds |
 
 ## Example LLM Session
 
@@ -419,13 +468,16 @@ $ scraper eval '[...document.querySelectorAll("tr")]
 ]
 ```
 
-The LLM uses `snapshot` to orient (compact YAML, not full HTML), then writes a JS expression to extract exactly the data it needs. If the expression is wrong, it inspects the result and refines — same iterative loop as writing SQL queries.
+The LLM uses `snapshot` to orient (compact YAML, not full HTML), then writes a JS expression to
+extract exactly the data it needs. If the expression is wrong, it inspects the result and refines —
+same iterative loop as writing SQL queries.
 
 ## Tech Stack
 
 - **Runtime:** Deno 2.x
 - **CDP client:** `@simple-cdp/simple-cdp` from JSR (zero deps, Proxy-based, ~200 lines)
-- **Browser:** Headless Chrome via `Deno.Command` with `--headless=new --remote-debugging-port=<dynamic>` (internal, ephemeral port)
+- **Browser:** Headless Chrome via `Deno.Command` with
+  `--headless=new --remote-debugging-port=<dynamic>` (internal, ephemeral port)
 - **HTTP server:** `Deno.serve` (built-in, no framework)
 - **DOM for tests:** `deno-dom` for unit tests, real Chrome for integration
 - **No other dependencies**

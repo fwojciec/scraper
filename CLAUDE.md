@@ -1,6 +1,7 @@
 # Scraper
 
-Intelligent web scraping CLI for LLM agents. Uses CDP to control headless Chrome, ARIA snapshots for compact page representation, JS eval for surgical data extraction.
+Intelligent web scraping CLI for LLM agents. Uses CDP to control headless Chrome, ARIA snapshots for
+compact page representation, JS eval for surgical data extraction.
 
 ## Architecture
 
@@ -10,7 +11,8 @@ Ben Johnson's standard package layout adapted for TypeScript/Deno.
 
 - `src/domain/` imports NOTHING from this project. Zero imports. Pure types and interfaces.
 - `src/app/` imports ONLY from `domain/`.
-- Adapter packages (`cdp/`, `aria/`, `http/`, `cli/`) import from `domain/` and (for `http/`) `app/`.
+- Adapter packages (`cdp/`, `aria/`, `http/`, `cli/`) import from `domain/` and (for `http/`)
+  `app/`.
 - Adapters NEVER import from other adapters.
 - `src/main.ts` imports from adapters and wires everything together.
 - `cli/` is a stateless HTTP client — it talks to the daemon via fetch, never imports `app/`.

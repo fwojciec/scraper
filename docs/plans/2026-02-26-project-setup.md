@@ -1,10 +1,14 @@
 # Project Setup Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan
+> task-by-task.
 
-**Goal:** Scaffold the scraper project with Deno config, directory structure, dependency lint enforcement, CLAUDE.md, and a GitHub repo.
+**Goal:** Scaffold the scraper project with Deno config, directory structure, dependency lint
+enforcement, CLAUDE.md, and a GitHub repo.
 
-**Architecture:** Deno 2.x project following Ben Johnson's standard package layout. Domain types at root, adapters named after wrapped dependencies, use-case layer, thin composition root. Dependency boundaries enforced by a `deno info --json` based lint script.
+**Architecture:** Deno 2.x project following Ben Johnson's standard package layout. Domain types at
+root, adapters named after wrapped dependencies, use-case layer, thin composition root. Dependency
+boundaries enforced by a `deno info --json` based lint script.
 
 **Tech Stack:** Deno 2.7+, TypeScript, `@simple-cdp/simple-cdp` (JSR)
 
@@ -13,6 +17,7 @@
 ### Task 1: Initialize git repo and deno.json
 
 **Files:**
+
 - Create: `deno.json`
 - Create: `.gitignore`
 
@@ -79,8 +84,8 @@ Create `/Users/filip/code/deno/scraper/deno.json`:
 
 **Step 4: Verify deno.json is valid**
 
-Run: `cd /Users/filip/code/deno/scraper && deno fmt --check deno.json`
-Expected: no errors (or auto-format if needed)
+Run: `cd /Users/filip/code/deno/scraper && deno fmt --check deno.json` Expected: no errors (or
+auto-format if needed)
 
 **Step 5: Commit**
 
@@ -93,6 +98,7 @@ cd /Users/filip/code/deno/scraper && git add deno.json .gitignore && git commit 
 ### Task 2: Create domain types
 
 **Files:**
+
 - Create: `src/domain/page.ts`
 - Create: `src/domain/eval.ts`
 - Create: `src/domain/browser.ts`
@@ -191,8 +197,7 @@ export type { BrowserService, SnapshotService } from "./browser.ts";
 
 **Step 6: Type-check**
 
-Run: `cd /Users/filip/code/deno/scraper && deno check src/domain/mod.ts`
-Expected: no errors
+Run: `cd /Users/filip/code/deno/scraper && deno check src/domain/mod.ts` Expected: no errors
 
 **Step 7: Commit**
 
@@ -205,6 +210,7 @@ cd /Users/filip/code/deno/scraper && git add src/domain/ && git commit -m "feat:
 ### Task 3: Create directory structure with placeholder mod.ts files
 
 **Files:**
+
 - Create: `src/app/mod.ts`
 - Create: `src/cdp/mod.ts`
 - Create: `src/aria/mod.ts`
@@ -216,34 +222,41 @@ cd /Users/filip/code/deno/scraper && git add src/domain/ && git commit -m "feat:
 
 **Step 1: Create placeholder barrel files**
 
-Each `mod.ts` is an empty barrel for now — adapters will export their implementations as we build them.
+Each `mod.ts` is an empty barrel for now — adapters will export their implementations as we build
+them.
 
 Create `src/app/mod.ts`:
+
 ```ts
 // Use cases: orchestrate domain interfaces. Imports only from ../domain/.
 ```
 
 Create `src/cdp/mod.ts`:
+
 ```ts
 // Adapter: Chrome DevTools Protocol. Implements BrowserService.
 ```
 
 Create `src/aria/mod.ts`:
+
 ```ts
 // Adapter: DOM Accessibility API. Implements SnapshotService.
 ```
 
 Create `src/http/mod.ts`:
+
 ```ts
 // Adapter: Deno.serve HTTP server. Delegates to app/ use cases.
 ```
 
 Create `src/cli/mod.ts`:
+
 ```ts
 // Adapter: CLI (Deno.args). Stateless HTTP client to daemon.
 ```
 
 Create `src/main.ts`:
+
 ```ts
 // Composition root: wires adapters -> app -> domain.
 // `scraper start` launches daemon, all other commands are CLI client.
@@ -266,6 +279,7 @@ cd /Users/filip/code/deno/scraper && git add src/ tests/ scripts/ && git commit 
 ### Task 4: Create dependency lint script
 
 **Files:**
+
 - Create: `scripts/lint-deps.ts`
 
 **Step 1: Write the lint script**
@@ -413,6 +427,7 @@ cd /Users/filip/code/deno/scraper && git add scripts/lint-deps.ts && git commit 
 Verify the lint script actually catches violations.
 
 **Files:**
+
 - Create: `scripts/lint-deps.test.ts`
 
 **Step 1: Write the test**
@@ -435,7 +450,8 @@ Deno.test("lint:deps catches no violations on clean project", async () => {
 
 **Step 2: Run the test**
 
-Run: `cd /Users/filip/code/deno/scraper && deno test --allow-run --allow-read scripts/lint-deps.test.ts`
+Run:
+`cd /Users/filip/code/deno/scraper && deno test --allow-run --allow-read scripts/lint-deps.test.ts`
 Expected: PASS
 
 **Step 3: Commit**
@@ -449,6 +465,7 @@ cd /Users/filip/code/deno/scraper && git add scripts/lint-deps.test.ts && git co
 ### Task 6: Create CLAUDE.md
 
 **Files:**
+
 - Create: `CLAUDE.md`
 
 **Step 1: Write CLAUDE.md**
@@ -458,7 +475,8 @@ Create `/Users/filip/code/deno/scraper/CLAUDE.md`:
 ```markdown
 # Scraper
 
-Intelligent web scraping CLI for LLM agents. Uses CDP to control headless Chrome, ARIA snapshots for compact page representation, JS eval for surgical data extraction.
+Intelligent web scraping CLI for LLM agents. Uses CDP to control headless Chrome, ARIA snapshots for
+compact page representation, JS eval for surgical data extraction.
 
 ## Architecture
 
@@ -468,7 +486,8 @@ Ben Johnson's standard package layout adapted for TypeScript/Deno.
 
 - `src/domain/` imports NOTHING from this project. Zero imports. Pure types and interfaces.
 - `src/app/` imports ONLY from `domain/`.
-- Adapter packages (`cdp/`, `aria/`, `http/`, `cli/`) import from `domain/` and (for `http/`) `app/`.
+- Adapter packages (`cdp/`, `aria/`, `http/`, `cli/`) import from `domain/` and (for `http/`)
+  `app/`.
 - Adapters NEVER import from other adapters.
 - `src/main.ts` imports from adapters and wires everything together.
 - `cli/` is a stateless HTTP client — it talks to the daemon via fetch, never imports `app/`.
@@ -536,8 +555,7 @@ cd /Users/filip/code/deno/scraper && gh repo create fwojciec/scraper --public --
 
 **Step 2: Verify**
 
-Run: `gh repo view fwojciec/scraper --json url`
-Expected: shows the repo URL
+Run: `gh repo view fwojciec/scraper --json url` Expected: shows the repo URL
 
 ---
 
@@ -545,8 +563,8 @@ Expected: shows the repo URL
 
 **Step 1: Run the CI task**
 
-Run: `cd /Users/filip/code/deno/scraper && deno task ci`
-Expected: all checks pass (fmt, lint, check, lint:deps, test)
+Run: `cd /Users/filip/code/deno/scraper && deno task ci` Expected: all checks pass (fmt, lint,
+check, lint:deps, test)
 
 **Step 2: Fix any issues and commit**
 
