@@ -1,1 +1,1 @@
-// Adapter: Deno.serve HTTP server. Delegates to app/ use cases.
+// Adapter: Deno.serve HTTP server. Receives wired domain functions from main.ts.

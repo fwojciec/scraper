@@ -1,14 +1,20 @@
 # Project Setup Implementation Plan
 
+> **STATUS: EXECUTED.** This plan has been implemented. The architecture was subsequently
+> simplified: `app/` layer was removed; `domain/` became the functional core (types + pure
+> functions); all adapters import only from `domain/` with uniform rules. See the design doc and
+> CLAUDE.md for current architecture.
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan
 > task-by-task.
 
 **Goal:** Scaffold the scraper project with Deno config, directory structure, dependency lint
 enforcement, CLAUDE.md, and a GitHub repo.
 
-**Architecture:** Deno 2.x project following Ben Johnson's standard package layout. Domain types at
-root, adapters named after wrapped dependencies, use-case layer, thin composition root. Dependency
-boundaries enforced by a `deno info --json` based lint script.
+**Architecture:** Deno 2.x project following functional core / imperative shell. Domain is the
+functional core (pure types, interfaces, pure functions). Adapters are the imperative shell, each
+named after the dependency they wrap. Composition root wires them. Dependency boundaries enforced by
+a `deno info --json` based lint script.
 
 **Tech Stack:** Deno 2.7+, TypeScript, `@simple-cdp/simple-cdp` (JSR)
 
