@@ -4,6 +4,7 @@ export interface ChromeProcess {
   pid: number;
   port: number;
   process: Deno.ChildProcess;
+  userDataDir: string;
 }
 
 export interface LaunchOptions {
@@ -21,7 +22,7 @@ function findFreePort(): number {
 }
 
 /** Wait for Chrome's /json/version endpoint to become available. */
-async function waitForChrome(port: number, maxRetries = 20, delay = 150): Promise<void> {
+async function waitForChrome(port: number, maxRetries = 40, delay = 250): Promise<void> {
   for (let i = 0; i < maxRetries; i++) {
     try {
       const res = await fetch(`http://127.0.0.1:${port}/json/version`);
@@ -73,8 +74,10 @@ export async function launchChrome(options?: LaunchOptions): Promise<ChromeProce
   const chromePath = options?.chromePath ?? findChromePath();
   const headless = options?.headless ?? true;
 
+  const userDataDir = Deno.makeTempDirSync({ prefix: "scraper-chrome-" });
   const args = [
     `--remote-debugging-port=${port}`,
+    `--user-data-dir=${userDataDir}`,
     "--no-first-run",
     "--no-default-browser-check",
     "--disable-background-networking",
@@ -84,6 +87,7 @@ export async function launchChrome(options?: LaunchOptions): Promise<ChromeProce
     "--disable-translate",
     "--mute-audio",
     "--no-sandbox",
+    "--use-mock-keychain",
   ];
   if (headless) {
     args.unshift("--headless=new");
@@ -96,7 +100,7 @@ export async function launchChrome(options?: LaunchOptions): Promise<ChromeProce
     stderr: "null",
   });
   const process = command.spawn();
-  const chrome: ChromeProcess = { pid: process.pid, port, process };
+  const chrome: ChromeProcess = { pid: process.pid, port, process, userDataDir };
 
   try {
     await waitForChrome(port);
@@ -108,7 +112,7 @@ export async function launchChrome(options?: LaunchOptions): Promise<ChromeProce
   return chrome;
 }
 
-/** Kill a Chrome process. */
+/** Kill a Chrome process and clean up its user data directory. */
 export async function killChrome(chrome: ChromeProcess): Promise<void> {
   try {
     chrome.process.kill("SIGTERM");
@@ -120,5 +124,10 @@ export async function killChrome(chrome: ChromeProcess): Promise<void> {
     await chrome.process.status;
   } catch {
     // Process already exited
+  }
+  try {
+    await Deno.remove(chrome.userDataDir, { recursive: true });
+  } catch {
+    // Best effort cleanup
   }
 }

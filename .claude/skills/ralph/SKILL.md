@@ -64,38 +64,39 @@ deno task ci
 git add .
 ```
 
-Run `roborev review` exactly once — each invocation is a paid review. **NEVER re-run this command**
-to "retry" — a second run creates a second paid review.
+Run `roborev review` exactly once — each invocation is a paid review. **NEVER re-run to "retry".**
 
-Use this exact command (the trailing `echo` prevents the Bash tool from framing exit 1 as an error):
-
-```bash
-roborev review --dirty --wait; echo "ROBOREV_EXIT=$?"
-```
-
-### Reading results
-
-`--wait` produces **no stdout** — all signal is in the exit code captured by the `echo`:
-
-- `ROBOREV_EXIT=0` → review passed → proceed to Phase 5
-- `ROBOREV_EXIT=1` → review has findings (this is NOT a failure) → read them
-
-**IMPORTANT**: exit 1 means "findings exist", not "command failed". Do NOT re-run the command.
-
-To read findings, get the job ID from `roborev status`, then `roborev show <job-id>`:
+### Step 1: Submit
 
 ```bash
-roborev status          # find latest job ID
-roborev show <job-id>   # read findings (only works after job finishes)
+roborev review --dirty
 ```
 
-If `roborev show` says "no review found", the job is still running — check `roborev status` and
-wait.
+This prints a job ID and returns immediately. Note the job ID.
 
-**PASS**: proceed. **FAIL**: read findings with `roborev show`. Exercise judgment — fix findings you
-agree with at any severity, skip ones you don't. You have better context than a separate fix agent.
-Re-validate with `deno task ci`, then re-review once more (max 2 paid reviews per issue). After the
-2nd review: fix what you agree with, proceed — no further reviews.
+### Step 2: Wait for results
+
+Poll until the job finishes (usually 30-90 seconds):
+
+```bash
+roborev status
+```
+
+When status shows the job is complete, read findings:
+
+```bash
+roborev show <job-id>
+```
+
+If `roborev show` says "no review found", the job is still running — wait and re-check status.
+
+### Step 3: Act on findings
+
+- **No findings**: proceed to Phase 5.
+- **Has findings**: exercise judgment — fix findings you agree with at any severity, skip ones you
+  don't. You have better context than a separate fix agent. Re-validate with `deno task ci`, then
+  re-review once more (max 2 paid reviews per issue). After the 2nd review: fix what you agree with,
+  proceed — no further reviews.
 
 ---
 
