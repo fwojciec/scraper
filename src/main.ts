@@ -45,8 +45,28 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
+// Track active HTTP server so killProcess can trigger graceful shutdown
+// instead of SIGTERM when rolling back our own daemon.
+let activeServer: Deno.HttpServer | undefined;
+
 function killProcess(pid: number): void {
+  if (pid === Deno.pid && activeServer) {
+    activeServer.shutdown();
+    return;
+  }
   Deno.kill(pid, "SIGTERM");
+}
+
+const DEFAULT_EVAL_TIMEOUT = 30_000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let id: number;
+  return Promise.race([
+    promise,
+    new Promise<never>((_resolve, reject) => {
+      id = setTimeout(() => reject(new Error("evaluation timed out")), ms);
+    }),
+  ]).finally(() => clearTimeout(id));
 }
 
 async function spawnDaemon(opts: StartOptions): Promise<PidFile> {
@@ -62,11 +82,13 @@ async function spawnDaemon(opts: StartOptions): Promise<PidFile> {
     await killChrome(chrome);
     throw err;
   }
+
+  const evalTimeout = opts.evalTimeout ?? DEFAULT_EVAL_TIMEOUT;
   const snapshotSvc = createSnapshotService();
 
   const server = createServer({
     navigate: (req) => browser.navigate(req),
-    evaluate: (req) => browser.evaluate(req),
+    evaluate: (req) => withTimeout(browser.evaluate(req), evalTimeout),
     screenshot: (name, fullPage) => browser.screenshot(name, fullPage),
     listPages: () => browser.listPages(),
     closePage: (name) => browser.closePage(name),
@@ -78,10 +100,19 @@ async function spawnDaemon(opts: StartOptions): Promise<PidFile> {
     },
   });
 
-  const httpServer = server.serve({ port: opts.port });
+  let httpServer: Deno.HttpServer;
+  try {
+    httpServer = server.serve({ port: opts.port });
+  } catch (err) {
+    browser.close();
+    await killChrome(chrome);
+    throw err;
+  }
+  activeServer = httpServer;
 
   // Clean up Chrome and CDP when HTTP server shuts down.
   httpServer.finished.then(async () => {
+    activeServer = undefined;
     try {
       browser.close();
       await killChrome(chrome);
