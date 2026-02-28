@@ -72,13 +72,15 @@ function flagString(flags: Record<string, string | true>, key: string): string |
   return typeof val === "string" ? val : undefined;
 }
 
-function flagNumber(flags: Record<string, string | true>, key: string): number | undefined {
+function flagNumber(
+  flags: Record<string, string | true>,
+  key: string,
+): [number | undefined, string | undefined] {
   const val = flags[key];
-  if (typeof val === "string") {
-    const n = Number(val);
-    if (!Number.isNaN(n)) return n;
-  }
-  return undefined;
+  if (val === undefined || val === true) return [undefined, undefined];
+  const n = Number(val);
+  if (Number.isNaN(n)) return [undefined, `--${key} must be a number, got '${val}'`];
+  return [n, undefined];
 }
 
 function flagBoolean(flags: Record<string, string | true>, key: string): boolean {
@@ -119,9 +121,17 @@ async function handleDaemonResponse(
 
 async function handleStart(args: string[], deps: CliDeps): Promise<number> {
   const { flags } = parseFlags(args);
-  const port = flagNumber(flags, "port") ?? 3222;
+  const [port = 3222, portErr] = flagNumber(flags, "port");
+  if (portErr) {
+    deps.stderr(`error: ${portErr}\n`);
+    return 1;
+  }
   const chromePath = flagString(flags, "chrome-path");
-  const evalTimeout = flagNumber(flags, "eval-timeout");
+  const [evalTimeout, etErr] = flagNumber(flags, "eval-timeout");
+  if (etErr) {
+    deps.stderr(`error: ${etErr}\n`);
+    return 1;
+  }
 
   const existing = await deps.readPidFile();
   if (existing) {
@@ -134,12 +144,18 @@ async function handleStart(args: string[], deps: CliDeps): Promise<number> {
     await deps.removePidFile();
   }
 
+  let pf: PidFile | undefined;
   try {
-    const pf = await deps.spawnDaemon({ port, chromePath, evalTimeout });
+    pf = await deps.spawnDaemon({ port, chromePath, evalTimeout });
     await deps.writePidFile(pf);
     deps.stdout(`daemon started (pid ${pf.pid}, port ${pf.port})\n`);
     return 0;
   } catch (err) {
+    if (pf) {
+      try {
+        deps.killProcess(pf.pid);
+      } catch { /* already dead */ }
+    }
     deps.stderr(
       `error: failed to start daemon: ${err instanceof Error ? err.message : err}\n`,
     );
@@ -164,7 +180,7 @@ async function handleStop(deps: CliDeps): Promise<number> {
     // daemon unreachable, fall back to SIGTERM
   }
 
-  if (!shutdownViaHttp) {
+  if (!shutdownViaHttp && deps.isProcessAlive(pf.pid)) {
     try {
       deps.killProcess(pf.pid);
     } catch {
@@ -229,9 +245,17 @@ async function handleSnapshot(args: string[], deps: CliDeps): Promise<number> {
   const body: Record<string, unknown> = {};
   const name = flagString(flags, "name");
   if (name) body.name = name;
-  const maxDepth = flagNumber(flags, "max-depth");
+  const [maxDepth, mdErr] = flagNumber(flags, "max-depth");
+  if (mdErr) {
+    deps.stderr(`error: ${mdErr}\n`);
+    return 1;
+  }
   if (maxDepth !== undefined) body.maxDepth = maxDepth;
-  const maxNodes = flagNumber(flags, "max-nodes");
+  const [maxNodes, mnErr] = flagNumber(flags, "max-nodes");
+  if (mnErr) {
+    deps.stderr(`error: ${mnErr}\n`);
+    return 1;
+  }
   if (maxNodes !== undefined) body.maxNodes = maxNodes;
   const selector = flagString(flags, "selector");
   if (selector) body.selector = selector;

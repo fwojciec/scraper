@@ -518,6 +518,71 @@ Deno.test("start reports spawn failure", async () => {
   assertStringIncludes(io.err, "Chrome not found");
 });
 
+Deno.test("start kills daemon if PID file write fails", async () => {
+  let killedPid = 0;
+  const io = capture();
+  const code = await runCli(
+    ["start"],
+    stubDeps({
+      readPidFile: () => Promise.resolve(null),
+      spawnDaemon: () => Promise.resolve({ pid: 456, port: 3222, cdpPort: 9234 }),
+      writePidFile: () => Promise.reject(new Error("EACCES")),
+      killProcess: (pid: number) => {
+        killedPid = pid;
+      },
+      stderr: io.stderr,
+    }),
+  );
+  assertEquals(code, 1);
+  assertEquals(killedPid, 456);
+  assertStringIncludes(io.err, "EACCES");
+});
+
+Deno.test("start rejects malformed --port", async () => {
+  const io = capture();
+  const code = await runCli(
+    ["start", "--port", "abc"],
+    stubDeps({ readPidFile: () => Promise.resolve(null), stderr: io.stderr }),
+  );
+  assertEquals(code, 1);
+  assertStringIncludes(io.err, "--port must be a number");
+});
+
+Deno.test("snapshot rejects malformed --max-depth", async () => {
+  const io = capture();
+  const code = await runCli(
+    ["snapshot", "--max-depth", "deep"],
+    stubDeps({ stderr: io.stderr }),
+  );
+  assertEquals(code, 1);
+  assertStringIncludes(io.err, "--max-depth must be a number");
+});
+
+Deno.test("stop with stale PID skips kill and cleans up", async () => {
+  let killCalled = false;
+  let pidRemoved = false;
+  const io = capture();
+  const code = await runCli(
+    ["stop"],
+    stubDeps({
+      fetch: () => Promise.reject(new Error("connection refused")),
+      isProcessAlive: () => false,
+      killProcess: () => {
+        killCalled = true;
+      },
+      removePidFile: () => {
+        pidRemoved = true;
+        return Promise.resolve();
+      },
+      stdout: io.stdout,
+    }),
+  );
+  assertEquals(code, 0);
+  assertEquals(killCalled, false);
+  assertEquals(pidRemoved, true);
+  assertStringIncludes(io.out, "daemon stopped");
+});
+
 // --- Daemon error responses ---
 
 Deno.test("daemon error response prints error to stderr", async () => {
