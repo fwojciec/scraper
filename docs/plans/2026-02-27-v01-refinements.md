@@ -2,8 +2,8 @@
 
 ## Context
 
-Post-MVP code review identified four areas for improvement: test structure doesn't separate fast unit
-tests from slow Chrome-dependent integration tests; the shutdown path is optimistic (CLI claims
+Post-MVP code review identified four areas for improvement: test structure doesn't separate fast
+unit tests from slow Chrome-dependent integration tests; the shutdown path is optimistic (CLI claims
 "daemon stopped" before cleanup completes); `main.ts` has accreted generic persistence concerns
 beyond composition; and PID file writes are not atomic.
 
@@ -27,18 +27,18 @@ subprocesses). `deno task ci` is the full quality gate that runs both.
 
 **Current test classification:**
 
-| File                              | Type        | Why                                    |
-| --------------------------------- | ----------- | -------------------------------------- |
-| `src/aria/snapshot.test.ts`       | Unit        | Mock `evaluateInPage`                  |
-| `src/aria/tree.test.ts`           | Unit        | `deno-dom`, no Chrome                  |
-| `src/aria/render.test.ts`         | Unit        | Pure data in, string out               |
-| `src/cli/mod.test.ts`             | Unit        | All deps stubbed                       |
-| `scripts/lint-deps.test.ts`       | Unit        | `Deno.lint.runPlugin`, no I/O          |
-| `src/http/server.test.ts:1-269`   | Unit        | `server.request()` with stubs          |
-| `src/http/server.test.ts:271-294` | Integration | Real `Deno.serve` + `fetch`            |
-| `src/cdp/chrome.test.ts`          | Integration | Launches real Chrome                   |
-| `src/cdp/connection.test.ts`      | Integration | Real Chrome + CDP + filesystem (screenshot) |
-| `tests/integration/pipeline.test.ts` | Integration | Real Chrome + fixture server + CDP  |
+| File                                 | Type        | Why                                         |
+| ------------------------------------ | ----------- | ------------------------------------------- |
+| `src/aria/snapshot.test.ts`          | Unit        | Mock `evaluateInPage`                       |
+| `src/aria/tree.test.ts`              | Unit        | `deno-dom`, no Chrome                       |
+| `src/aria/render.test.ts`            | Unit        | Pure data in, string out                    |
+| `src/cli/mod.test.ts`                | Unit        | All deps stubbed                            |
+| `scripts/lint-deps.test.ts`          | Unit        | `Deno.lint.runPlugin`, no I/O               |
+| `src/http/server.test.ts:1-269`      | Unit        | `server.request()` with stubs               |
+| `src/http/server.test.ts:271-294`    | Integration | Real `Deno.serve` + `fetch`                 |
+| `src/cdp/chrome.test.ts`             | Integration | Launches real Chrome                        |
+| `src/cdp/connection.test.ts`         | Integration | Real Chrome + CDP + filesystem (screenshot) |
+| `tests/integration/pipeline.test.ts` | Integration | Real Chrome + fixture server + CDP          |
 
 **Convention (document in CLAUDE.md):**
 
@@ -106,12 +106,12 @@ On the server side, `/shutdown` in `src/http/server.ts:175-184` queues `httpServ
 
 **Shutdown contract (replaces current behavior):**
 
-| `/shutdown` response | Process alive after timeout? | Action                                               | Exit code |
-| -------------------- | ---------------------------- | ---------------------------------------------------- | --------- |
-| OK                   | No (exited within timeout)   | Remove PID file, print "daemon stopped"              | 0         |
-| OK                   | Yes (still alive)            | Print error, **keep PID file**                       | 1         |
-| Unreachable          | No (already dead)            | Remove PID file (stale state), print "daemon stopped"| 0         |
-| Unreachable          | Yes (still alive)            | Print error, **keep PID file**                       | 1         |
+| `/shutdown` response | Process alive after timeout? | Action                                                | Exit code |
+| -------------------- | ---------------------------- | ----------------------------------------------------- | --------- |
+| OK                   | No (exited within timeout)   | Remove PID file, print "daemon stopped"               | 0         |
+| OK                   | Yes (still alive)            | Print error, **keep PID file**                        | 1         |
+| Unreachable          | No (already dead)            | Remove PID file (stale state), print "daemon stopped" | 0         |
+| Unreachable          | Yes (still alive)            | Print error, **keep PID file**                        | 1         |
 
 **Safety rule:** Never remove the PID file while the daemon may still be a live, valid process. PID
 file cleanup is only safe when liveness is disproven or shutdown is confirmed complete.
@@ -122,14 +122,14 @@ file cleanup is only safe when liveness is disproven or shutdown is confirmed co
    daemon is unreachable), poll `deps.isProcessAlive(pf.pid)` with short sleeps (100ms) until the
    process is dead, with a timeout (5s). Behavior depends on the outcome per the table above.
 
-2. **No server-side change needed.** The `/shutdown` endpoint already triggers the full cleanup chain
-   (`httpServer.shutdown()` → `httpServer.finished` → close CDP → kill Chrome → remove PID file).
-   The fix is purely about the CLI waiting for completion rather than racing ahead.
+2. **No server-side change needed.** The `/shutdown` endpoint already triggers the full cleanup
+   chain (`httpServer.shutdown()` → `httpServer.finished` → close CDP → kill Chrome → remove PID
+   file). The fix is purely about the CLI waiting for completion rather than racing ahead.
 
 **`CliDeps` interface change:**
 
-Add `sleep(ms: number): Promise<void>` to `CliDeps` so the polling loop is testable (tests inject
-an instant-resolving sleep). `main.ts` wires it to a real `setTimeout`-based delay.
+Add `sleep(ms: number): Promise<void>` to `CliDeps` so the polling loop is testable (tests inject an
+instant-resolving sleep). `main.ts` wires it to a real `setTimeout`-based delay.
 
 **Files to modify:**
 
@@ -148,9 +148,9 @@ filesystem concern and should live in a dedicated `src/fs/` adapter.
 **Scope:** This extraction is specifically about moving generic JSON file persistence out of
 `main.ts`. It is not a broader cleanup of all infrastructure. `main.ts` will continue to own
 lifecycle orchestration for the concrete system it wires together — that includes daemon
-startup/shutdown coordination and child-process lifecycle management (`isProcessAlive`, `killProcess`,
-`withTimeout`, `spawnDaemon`). Those stay in `main.ts` because they are composition-level concerns
-tied to the specific adapters being wired, not generic persistence.
+startup/shutdown coordination and child-process lifecycle management (`isProcessAlive`,
+`killProcess`, `withTimeout`, `spawnDaemon`). Those stay in `main.ts` because they are
+composition-level concerns tied to the specific adapters being wired, not generic persistence.
 
 **Interface:**
 
@@ -188,8 +188,8 @@ const deps: CliDeps = {
   readPidFile: () => store.read<PidFile>(PID_PATH),
   writePidFile: (pf) => store.write(PID_PATH, pf),
   removePidFile: () => store.remove(PID_PATH),
-  isProcessAlive,   // stays in main.ts — process lifecycle, not persistence
-  killProcess,      // stays in main.ts — process lifecycle, not persistence
+  isProcessAlive, // stays in main.ts — process lifecycle, not persistence
+  killProcess, // stays in main.ts — process lifecycle, not persistence
   // ...
 };
 ```

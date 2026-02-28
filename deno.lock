@@ -5,6 +5,7 @@
     "jsr:@simple-cdp/simple-cdp@^1.8.0": "1.8.6",
     "jsr:@std/assert@1": "1.0.19",
     "jsr:@std/internal@^1.0.12": "1.0.12",
+    "jsr:@std/path@*": "1.1.4",
     "jsr:@std/path@1": "1.1.4"
   },
   "jsr": {
@@ -34,7 +35,8 @@
     "dependencies": [
       "jsr:@b-fuze/deno-dom@0.1",
       "jsr:@simple-cdp/simple-cdp@^1.8.0",
-      "jsr:@std/assert@1"
+      "jsr:@std/assert@1",
+      "jsr:@std/path@1"
     ]
   }
 }

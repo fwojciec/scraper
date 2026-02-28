@@ -5,35 +5,15 @@ import { type CliDeps, type PidFile, runCli, type StartOptions } from "./cli/mod
 import { createCdpConnection, killChrome, launchChrome } from "./cdp/mod.ts";
 import { createSnapshotService } from "./aria/mod.ts";
 import { createServer } from "./http/mod.ts";
+import { createJsonFileStore } from "./fs/mod.ts";
 
 const HOME = Deno.env.get("HOME");
 if (!HOME) throw new Error("HOME environment variable is not set");
-const PID_DIR = `${HOME}/.scraper`;
-const PID_PATH = `${PID_DIR}/daemon.json`;
+const PID_PATH = `${HOME}/.scraper/daemon.json`;
+
+const pidStore = createJsonFileStore<PidFile>(PID_PATH);
 
 const encoder = new TextEncoder();
-
-async function readPidFile(): Promise<PidFile | null> {
-  try {
-    const text = await Deno.readTextFile(PID_PATH);
-    return JSON.parse(text) as PidFile;
-  } catch {
-    return null;
-  }
-}
-
-async function writePidFile(pf: PidFile): Promise<void> {
-  await Deno.mkdir(PID_DIR, { recursive: true });
-  await Deno.writeTextFile(PID_PATH, JSON.stringify(pf));
-}
-
-async function removePidFile(): Promise<void> {
-  try {
-    await Deno.remove(PID_PATH);
-  } catch {
-    // Already gone
-  }
-}
 
 function isProcessAlive(pid: number): boolean {
   try {
@@ -122,7 +102,7 @@ async function spawnDaemon(opts: StartOptions): Promise<PidFile> {
     } catch {
       // Best-effort cleanup
     }
-    await removePidFile();
+    await pidStore.remove();
   });
 
   return { pid: Deno.pid, port: opts.port, cdpPort: chrome.port };
@@ -130,9 +110,9 @@ async function spawnDaemon(opts: StartOptions): Promise<PidFile> {
 
 const deps: CliDeps = {
   fetch: globalThis.fetch,
-  readPidFile,
-  writePidFile,
-  removePidFile,
+  readPidFile: () => pidStore.read(),
+  writePidFile: (pf: PidFile) => pidStore.write(pf),
+  removePidFile: () => pidStore.remove(),
   isProcessAlive,
   killProcess,
   spawnDaemon,
