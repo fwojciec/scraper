@@ -369,28 +369,30 @@ Deno.test("stop sends POST /shutdown and removes PID file", async () => {
   assertStringIncludes(io.out, "daemon stopped");
 });
 
-Deno.test("stop falls back to kill when shutdown fails", async () => {
-  let killedPid = 0;
+Deno.test("stop cleans PID file without kill when daemon unreachable", async () => {
+  let killCalled = false;
   let pidRemoved = false;
   const io = capture();
   const code = await runCli(
     ["stop"],
     stubDeps({
       fetch: () => Promise.reject(new Error("connection refused")),
-      killProcess: (pid: number) => {
-        killedPid = pid;
+      killProcess: () => {
+        killCalled = true;
       },
       removePidFile: () => {
         pidRemoved = true;
         return Promise.resolve();
       },
       stdout: io.stdout,
+      stderr: io.stderr,
     }),
   );
   assertEquals(code, 0);
-  assertEquals(killedPid, 123);
+  assertEquals(killCalled, false);
   assertEquals(pidRemoved, true);
   assertStringIncludes(io.out, "daemon stopped");
+  assertStringIncludes(io.err, "stale PID file");
 });
 
 Deno.test("stop with no daemon returns error", async () => {
@@ -558,29 +560,14 @@ Deno.test("snapshot rejects malformed --max-depth", async () => {
   assertStringIncludes(io.err, "--max-depth must be a number");
 });
 
-Deno.test("stop with stale PID skips kill and cleans up", async () => {
-  let killCalled = false;
-  let pidRemoved = false;
+Deno.test("start rejects --port without value", async () => {
   const io = capture();
   const code = await runCli(
-    ["stop"],
-    stubDeps({
-      fetch: () => Promise.reject(new Error("connection refused")),
-      isProcessAlive: () => false,
-      killProcess: () => {
-        killCalled = true;
-      },
-      removePidFile: () => {
-        pidRemoved = true;
-        return Promise.resolve();
-      },
-      stdout: io.stdout,
-    }),
+    ["start", "--port"],
+    stubDeps({ readPidFile: () => Promise.resolve(null), stderr: io.stderr }),
   );
-  assertEquals(code, 0);
-  assertEquals(killCalled, false);
-  assertEquals(pidRemoved, true);
-  assertStringIncludes(io.out, "daemon stopped");
+  assertEquals(code, 1);
+  assertStringIncludes(io.err, "--port requires a value");
 });
 
 // --- Daemon error responses ---

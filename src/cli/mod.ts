@@ -77,7 +77,8 @@ function flagNumber(
   key: string,
 ): [number | undefined, string | undefined] {
   const val = flags[key];
-  if (val === undefined || val === true) return [undefined, undefined];
+  if (val === undefined) return [undefined, undefined];
+  if (val === true) return [undefined, `--${key} requires a value`];
   const n = Number(val);
   if (Number.isNaN(n)) return [undefined, `--${key} must be a number, got '${val}'`];
   return [n, undefined];
@@ -170,22 +171,18 @@ async function handleStop(deps: CliDeps): Promise<number> {
     return 1;
   }
 
-  let shutdownViaHttp = false;
   try {
     const res = await deps.fetch(`http://127.0.0.1:${pf.port}/shutdown`, {
       method: "POST",
     });
-    shutdownViaHttp = res.ok;
-  } catch {
-    // daemon unreachable, fall back to SIGTERM
-  }
-
-  if (!shutdownViaHttp && deps.isProcessAlive(pf.pid)) {
-    try {
-      deps.killProcess(pf.pid);
-    } catch {
-      // process already dead
+    if (!res.ok) {
+      deps.stderr("warning: daemon returned non-ok on shutdown\n");
     }
+  } catch {
+    // Daemon unreachable — either already dead or PID is stale.
+    // Do NOT SIGTERM: we cannot verify the PID still belongs to the daemon,
+    // so signaling it risks killing an unrelated process.
+    deps.stderr("warning: daemon unreachable, cleaning up stale PID file\n");
   }
 
   await deps.removePidFile();
