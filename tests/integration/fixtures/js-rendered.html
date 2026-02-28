@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>JS Rendered</title>
+  </head>
+  <body>
+    <h1>Product Reviews</h1>
+    <div id="reviews"></div>
+    <script>
+      const reviews = [
+        { user: "Alice", rating: 5, text: "Excellent product!" },
+        { user: "Bob", rating: 3, text: "Average quality." },
+      ];
+      const container = document.getElementById("reviews");
+      reviews.forEach((r) => {
+        const article = document.createElement("article");
+        article.innerHTML = `<h2>${r.user}</h2>` +
+          `<p>Rating: ${r.rating}/5</p>` +
+          `<p>${r.text}</p>`;
+        container.appendChild(article);
+      });
+    </script>
+  </body>
+</html>
