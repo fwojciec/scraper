@@ -15,11 +15,17 @@ interface TestContext {
 }
 
 async function setup(): Promise<TestContext> {
-  const fixtures = startFixtureServer();
-  const chrome = await launchChrome();
-  const browser = await createCdpConnection(chrome.port);
-  const snapshots = createSnapshotService();
-  return { fixtures, chrome, browser, snapshots };
+  const partial: Partial<TestContext> = {};
+  try {
+    partial.fixtures = startFixtureServer();
+    partial.chrome = await launchChrome();
+    partial.browser = await createCdpConnection(partial.chrome.port);
+    partial.snapshots = createSnapshotService();
+    return partial as TestContext;
+  } catch (err) {
+    await teardown(partial);
+    throw err;
+  }
 }
 
 async function teardown(ctx: Partial<TestContext>) {
@@ -59,7 +65,7 @@ Deno.test("snapshot: bestseller table has expected ARIA structure", async () => 
 
     // Verify table structure
     assert(result.yaml.includes("table"), "should contain table role");
-    assert(result.yaml.includes("row"), "should contain row roles");
+    assert(result.yaml.includes("- row"), "should contain row roles");
     assert(result.yaml.includes("columnheader"), "should contain columnheader roles");
     assert(result.yaml.includes("cell"), "should contain cell roles");
 
@@ -92,9 +98,18 @@ Deno.test("snapshot: JS-rendered page has dynamically created content", async ()
       evaluateInPage(ctx.browser, "jspage"),
     );
 
-    // Verify JS-rendered content is present (not just the static shell)
-    assert(result.yaml.includes("Alice"), "should contain JS-rendered reviewer name");
-    assert(result.yaml.includes("Bob"), "should contain JS-rendered reviewer name");
+    // Verify JS-rendered DOM structure (article + heading roles prove script executed;
+    // raw text like "Alice" also appears in the <script> source and would pass even
+    // if JS never ran).
+    assert(result.yaml.includes("- article"), "should contain article roles from JS-rendered DOM");
+    assert(
+      result.yaml.includes('heading "Alice"'),
+      "should contain heading with JS-rendered reviewer name",
+    );
+    assert(
+      result.yaml.includes('heading "Bob"'),
+      "should contain heading with JS-rendered reviewer name",
+    );
     assert(result.yaml.includes("Excellent product!"), "should contain JS-rendered review text");
     assert(result.yaml.includes("Rating: 5/5"), "should contain JS-rendered rating");
   } finally {
