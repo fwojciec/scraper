@@ -57,13 +57,30 @@ Do NOT commit until after review.
 ```bash
 deno task ci
 git add .
+```
+
+Run `roborev review` exactly once — each invocation is a paid review.
+
+```bash
 roborev review --dirty --wait
 ```
 
-Run `roborev review` exactly once. Each invocation is a paid review. If output is confusing, use
-`roborev status` / `roborev show <job-id>`.
+### Reading results
 
-**PASS**: proceed. **FAIL**: fix and re-review. After 2 failed cycles, stop and ask user.
+`--wait` produces **no stdout**. Interpret the exit code:
+
+- **exit 0** → review passed → proceed
+- **exit 1** → review had findings → read them with `roborev show <job-id>`
+
+The job ID is printed by the initial `roborev review --dirty` line (e.g. `Enqueued dirty review job 578`). If you missed it, use `roborev status` to find the latest job ID, then `roborev show <job-id>`.
+
+`roborev show` only works **after** the job finishes. If it says "no review found", the job is still
+running — check `roborev status` and wait.
+
+**PASS**: proceed. **FAIL**: read findings with `roborev show <job-id>`. Exercise judgment — fix
+findings you agree with at any severity, skip ones you don't. You have better context than a
+separate fix agent. Re-validate with `deno task ci`, then re-review once more (max 2 paid reviews
+per issue). After the 2nd review: fix what you agree with, proceed — no further reviews.
 
 ---
 
