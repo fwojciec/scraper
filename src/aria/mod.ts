@@ -7,3 +7,4 @@ export {
   type TreeOptions,
 } from "./tree.ts";
 export { renderYaml } from "./render.ts";
+export { createSnapshotService } from "./snapshot.ts";
