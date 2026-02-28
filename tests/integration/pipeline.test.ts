@@ -65,7 +65,7 @@ Deno.test("snapshot: bestseller table has expected ARIA structure", async () => 
 
     // Verify table structure
     assert(result.yaml.includes("table"), "should contain table role");
-    assert(result.yaml.includes("- row"), "should contain row roles");
+    assert(/^\s*- row[\s":]/m.test(result.yaml), "should contain row roles");
     assert(result.yaml.includes("columnheader"), "should contain columnheader roles");
     assert(result.yaml.includes("cell"), "should contain cell roles");
 
