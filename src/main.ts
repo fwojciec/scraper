@@ -45,9 +45,11 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
-// Track active HTTP server so killProcess can trigger graceful shutdown
-// instead of SIGTERM when rolling back our own daemon.
+// Track active daemon state so killProcess can trigger graceful shutdown
+// instead of SIGTERM when rolling back our own daemon, and so Deno.exit
+// can await cleanup before terminating.
 let activeServer: Deno.HttpServer | undefined;
+let pendingCleanup: Promise<void> | undefined;
 
 function killProcess(pid: number): void {
   if (pid === Deno.pid && activeServer) {
@@ -111,7 +113,8 @@ async function spawnDaemon(opts: StartOptions): Promise<PidFile> {
   activeServer = httpServer;
 
   // Clean up Chrome and CDP when HTTP server shuts down.
-  httpServer.finished.then(async () => {
+  // Stored in pendingCleanup so Deno.exit can await it.
+  pendingCleanup = httpServer.finished.then(async () => {
     activeServer = undefined;
     try {
       browser.close();
@@ -141,4 +144,7 @@ const code = await runCli(Deno.args, deps);
 
 // Exit immediately for client commands (non-zero or no daemon running).
 // When daemon is active, the HTTP server keeps the event loop alive.
-if (code !== 0) Deno.exit(code);
+if (code !== 0) {
+  if (pendingCleanup) await pendingCleanup;
+  Deno.exit(code);
+}
