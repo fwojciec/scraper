@@ -16,7 +16,13 @@
 
 - write failing tests first, then implement
 - prefer behavioral assertions to testing implementation
-- co-located as `<name>.test.ts`
+- **Unit tests** co-located as `<name>.test.ts` in `src/` and `scripts/` — no Chrome, no real
+  servers, no real network; stubs/mocks and fast local I/O only
+- **Integration tests** live under `tests/integration/` — real Chrome, real servers, subprocesses,
+  multi-component wiring, or any test needing `--allow-net`/`--allow-run`
+- `deno task test` runs unit tests only (`--allow-read --allow-write --allow-env`)
+- `deno task test:integration` runs integration tests (`--allow-all`)
+- `deno task ci` runs both as the full quality gate
 
 ## Quality Gate
 

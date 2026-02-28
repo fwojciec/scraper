@@ -1,5 +1,5 @@
 import { assertEquals, assertGreater } from "@std/assert";
-import { killChrome, launchChrome } from "./chrome.ts";
+import { killChrome, launchChrome } from "../../src/cdp/chrome.ts";
 
 Deno.test("launchChrome returns pid and port", async () => {
   const chrome = await launchChrome();

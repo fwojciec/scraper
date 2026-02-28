@@ -1,6 +1,6 @@
 import { assert, assertEquals, assertGreater, assertRejects } from "@std/assert";
-import { type ChromeProcess, killChrome, launchChrome } from "./chrome.ts";
-import { type CdpBrowserService, createCdpConnection } from "./connection.ts";
+import { type ChromeProcess, killChrome, launchChrome } from "../../src/cdp/chrome.ts";
+import { type CdpBrowserService, createCdpConnection } from "../../src/cdp/connection.ts";
 
 let chrome: ChromeProcess;
 let browser: CdpBrowserService;
