@@ -59,28 +59,38 @@ deno task ci
 git add .
 ```
 
-Run `roborev review` exactly once — each invocation is a paid review.
+Run `roborev review` exactly once — each invocation is a paid review. **NEVER re-run this command**
+to "retry" — a second run creates a second paid review.
+
+Use this exact command (the trailing `echo` prevents the Bash tool from framing exit 1 as an error):
 
 ```bash
-roborev review --dirty --wait
+roborev review --dirty --wait; echo "ROBOREV_EXIT=$?"
 ```
 
 ### Reading results
 
-`--wait` produces **no stdout**. Interpret the exit code:
+`--wait` produces **no stdout** — all signal is in the exit code captured by the `echo`:
 
-- **exit 0** → review passed → proceed
-- **exit 1** → review had findings → read them with `roborev show <job-id>`
+- `ROBOREV_EXIT=0` → review passed → proceed to Phase 4
+- `ROBOREV_EXIT=1` → review has findings (this is NOT a failure) → read them
 
-The job ID is printed by the initial `roborev review --dirty` line (e.g. `Enqueued dirty review job 578`). If you missed it, use `roborev status` to find the latest job ID, then `roborev show <job-id>`.
+**IMPORTANT**: exit 1 means "findings exist", not "command failed". Do NOT re-run the command.
 
-`roborev show` only works **after** the job finishes. If it says "no review found", the job is still
-running — check `roborev status` and wait.
+To read findings, get the job ID from `roborev status`, then `roborev show <job-id>`:
 
-**PASS**: proceed. **FAIL**: read findings with `roborev show <job-id>`. Exercise judgment — fix
-findings you agree with at any severity, skip ones you don't. You have better context than a
-separate fix agent. Re-validate with `deno task ci`, then re-review once more (max 2 paid reviews
-per issue). After the 2nd review: fix what you agree with, proceed — no further reviews.
+```bash
+roborev status          # find latest job ID
+roborev show <job-id>   # read findings (only works after job finishes)
+```
+
+If `roborev show` says "no review found", the job is still running — check `roborev status` and
+wait.
+
+**PASS**: proceed. **FAIL**: read findings with `roborev show`. Exercise judgment — fix findings you
+agree with at any severity, skip ones you don't. You have better context than a separate fix agent.
+Re-validate with `deno task ci`, then re-review once more (max 2 paid reviews per issue). After the
+2nd review: fix what you agree with, proceed — no further reviews.
 
 ---
 
