@@ -1,7 +1,7 @@
 // Composition root: wires adapters -> domain.
 // `scraper start` launches daemon, all other commands are CLI client.
 
-import { type CliDeps, type PidFile, runCli, type StartOptions } from "./cli/mod.ts";
+import { type CliDeps, type PidFile, runCli, type StartOptions, type Timeout } from "./cli/mod.ts";
 import { createCdpConnection, killChrome, launchChrome } from "./cdp/mod.ts";
 import { createSnapshotService } from "./aria/mod.ts";
 import { createServer } from "./http/mod.ts";
@@ -116,6 +116,13 @@ const deps: CliDeps = {
   isProcessAlive,
   killProcess,
   spawnDaemon,
+  startTimeout(ms: number): Timeout {
+    let id: number;
+    const promise = new Promise<never>((_resolve, reject) => {
+      id = setTimeout(() => reject(new Error("timed out")), ms);
+    });
+    return { promise, cancel: () => clearTimeout(id) };
+  },
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   stdout: (s) => Deno.stdout.writeSync(encoder.encode(s)),
   stderr: (s) => Deno.stderr.writeSync(encoder.encode(s)),

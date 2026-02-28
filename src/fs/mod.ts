@@ -27,7 +27,7 @@ export function createJsonFileStore<T>(path: string): JsonFileStore<T> {
     async write(data: T): Promise<void> {
       const dir = dirname(path);
       await Deno.mkdir(dir, { recursive: true });
-      const tmp = path + ".tmp";
+      const tmp = await Deno.makeTempFile({ dir });
       await Deno.writeTextFile(tmp, JSON.stringify(data));
       await Deno.rename(tmp, path);
     },

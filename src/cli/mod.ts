@@ -14,6 +14,12 @@ export interface StartOptions {
   evalTimeout?: number;
 }
 
+/** A cancellable timer that rejects on expiry. */
+export interface Timeout {
+  promise: Promise<never>;
+  cancel(): void;
+}
+
 /** Dependencies injected from main.ts composition root. */
 export interface CliDeps {
   fetch: typeof globalThis.fetch;
@@ -23,6 +29,7 @@ export interface CliDeps {
   isProcessAlive(pid: number): boolean;
   killProcess(pid: number): void;
   spawnDaemon(opts: StartOptions): Promise<PidFile>;
+  startTimeout(ms: number): Timeout;
   sleep(ms: number): Promise<void>;
   stdout(s: string): void;
   stderr(s: string): void;
@@ -175,15 +182,24 @@ async function handleStop(deps: CliDeps): Promise<number> {
     return 1;
   }
 
+  const abort = new AbortController();
+  const timeout = deps.startTimeout(STOP_TIMEOUT_MS);
   try {
-    const res = await deps.fetch(`http://127.0.0.1:${pf.port}/shutdown`, {
-      method: "POST",
-    });
+    const res = await Promise.race([
+      deps.fetch(`http://127.0.0.1:${pf.port}/shutdown`, {
+        method: "POST",
+        signal: abort.signal,
+      }),
+      timeout.promise,
+    ]);
     if (!res.ok) {
       deps.stderr("warning: daemon returned non-ok on shutdown\n");
     }
   } catch {
-    // Daemon unreachable — may be already dead or stale PID.
+    abort.abort();
+    // Daemon unreachable or timed out — may be already dead or stale PID.
+  } finally {
+    timeout.cancel();
   }
 
   // Poll until process exits or timeout.

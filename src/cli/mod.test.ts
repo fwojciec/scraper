@@ -1,5 +1,9 @@
 import { assertEquals, assertStringIncludes } from "@std/assert";
-import { type CliDeps, type PidFile, runCli } from "./mod.ts";
+import { type CliDeps, type PidFile, runCli, type Timeout } from "./mod.ts";
+
+function stubTimeout(): Timeout {
+  return { promise: new Promise<never>(() => {}), cancel: () => {} };
+}
 
 const DEFAULT_PID: PidFile = { pid: 123, port: 3222, cdpPort: 9234 };
 
@@ -19,6 +23,7 @@ function stubDeps(overrides: Partial<CliDeps> = {}): CliDeps {
     isProcessAlive: () => true,
     killProcess: () => {},
     spawnDaemon: () => Promise.resolve({ pid: 456, port: 3222, cdpPort: 9234 }),
+    startTimeout: () => stubTimeout(),
     sleep: () => Promise.resolve(),
     stdout: () => {},
     stderr: () => {},
@@ -442,6 +447,66 @@ Deno.test("stop: process exits after a few polls → remove PID, exit 0", async 
   assertEquals(code, 0);
   assertEquals(pidRemoved, true);
   assertEquals(pollCount, 3);
+  assertStringIncludes(io.out, "daemon stopped");
+});
+
+Deno.test("stop: fetch hangs → timeout fires, fetch aborted, timer cancelled", async () => {
+  let pidRemoved = false;
+  let fetchAborted = false;
+  let timeoutCancelled = false;
+  const io = capture();
+  const code = await runCli(
+    ["stop"],
+    stubDeps({
+      fetch: ((_input: string | URL | Request, init?: RequestInit) => {
+        return new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => {
+            fetchAborted = true;
+            reject(new DOMException("The operation was aborted.", "AbortError"));
+          });
+        });
+      }) as typeof globalThis.fetch,
+      startTimeout: () => ({
+        promise: Promise.reject(new Error("timed out")),
+        cancel: () => {
+          timeoutCancelled = true;
+        },
+      }),
+      isProcessAlive: () => false,
+      removePidFile: () => {
+        pidRemoved = true;
+        return Promise.resolve();
+      },
+      stdout: io.stdout,
+    }),
+  );
+  assertEquals(code, 0);
+  assertEquals(pidRemoved, true);
+  assertEquals(fetchAborted, true);
+  assertEquals(timeoutCancelled, true);
+  assertStringIncludes(io.out, "daemon stopped");
+});
+
+Deno.test("stop: shutdown OK → timeout cancelled, no leaked timer", async () => {
+  let timeoutCancelled = false;
+  const io = capture();
+  const code = await runCli(
+    ["stop"],
+    stubDeps({
+      fetch: () => Promise.resolve(jsonResponse({ ok: true })),
+      startTimeout: () => ({
+        promise: new Promise<never>(() => {}),
+        cancel: () => {
+          timeoutCancelled = true;
+        },
+      }),
+      isProcessAlive: () => false,
+      removePidFile: () => Promise.resolve(),
+      stdout: io.stdout,
+    }),
+  );
+  assertEquals(code, 0);
+  assertEquals(timeoutCancelled, true);
   assertStringIncludes(io.out, "daemon stopped");
 });
 

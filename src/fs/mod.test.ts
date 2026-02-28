@@ -58,6 +58,21 @@ Deno.test("JsonFileStore", async (t) => {
     assertEquals(JSON.parse(raw), data);
   });
 
+  await t.step("concurrent writes do not clobber each other", async () => {
+    const concPath = `${tmpDir}/concurrent.json`;
+    const concStore = createJsonFileStore<TestData>(concPath);
+    const writes = Array.from(
+      { length: 20 },
+      (_, i) => concStore.write({ name: `w${i}`, value: i }),
+    );
+    // All writes must resolve without error.
+    await Promise.all(writes);
+    // File must contain valid JSON from one of the writers.
+    const result = await concStore.read();
+    assertEquals(typeof result?.name, "string");
+    assertEquals(typeof result?.value, "number");
+  });
+
   // Cleanup
   await Deno.remove(tmpDir, { recursive: true });
 });
