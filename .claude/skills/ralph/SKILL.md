@@ -62,17 +62,40 @@ Do NOT commit until after review.
 ```bash
 deno task ci
 git add .
-roborev review --dirty --wait
 ```
 
-Run `roborev review` exactly once — each invocation is a paid review.
+Run `roborev review` exactly once — each invocation is a paid review. **NEVER re-run this command**
+to "retry" — a second run creates a second paid review.
 
-**PASS**: proceed. **FAIL**: `roborev fix`, re-validate, re-review. After 2 failed cycles, yield.
+Use this exact command (the trailing `echo` prevents the Bash tool from framing exit 1 as an error):
 
-### Yield (persistent failure)
+```bash
+roborev review --dirty --wait; echo "ROBOREV_EXIT=$?"
+```
 
-Comment learnings on issue, abandon branch, return to main. Do NOT create `.ralph-complete` — loop
-will retry with improved context.
+### Reading results
+
+`--wait` produces **no stdout** — all signal is in the exit code captured by the `echo`:
+
+- `ROBOREV_EXIT=0` → review passed → proceed to Phase 5
+- `ROBOREV_EXIT=1` → review has findings (this is NOT a failure) → read them
+
+**IMPORTANT**: exit 1 means "findings exist", not "command failed". Do NOT re-run the command.
+
+To read findings, get the job ID from `roborev status`, then `roborev show <job-id>`:
+
+```bash
+roborev status          # find latest job ID
+roborev show <job-id>   # read findings (only works after job finishes)
+```
+
+If `roborev show` says "no review found", the job is still running — check `roborev status` and
+wait.
+
+**PASS**: proceed. **FAIL**: read findings with `roborev show`. Exercise judgment — fix findings you
+agree with at any severity, skip ones you don't. You have better context than a separate fix agent.
+Re-validate with `deno task ci`, then re-review once more (max 2 paid reviews per issue). After the
+2nd review: fix what you agree with, proceed — no further reviews.
 
 ---
 
