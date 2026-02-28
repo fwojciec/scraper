@@ -570,6 +570,16 @@ Deno.test("start rejects --port without value", async () => {
   assertStringIncludes(io.err, "--port requires a value");
 });
 
+Deno.test("start rejects --port= (empty equals value)", async () => {
+  const io = capture();
+  const code = await runCli(
+    ["start", "--port="],
+    stubDeps({ readPidFile: () => Promise.resolve(null), stderr: io.stderr }),
+  );
+  assertEquals(code, 1);
+  assertStringIncludes(io.err, "--port requires a value");
+});
+
 // --- Daemon error responses ---
 
 Deno.test("daemon error response prints error to stderr", async () => {

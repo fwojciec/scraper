@@ -78,7 +78,7 @@ function flagNumber(
 ): [number | undefined, string | undefined] {
   const val = flags[key];
   if (val === undefined) return [undefined, undefined];
-  if (val === true) return [undefined, `--${key} requires a value`];
+  if (val === true || val === "") return [undefined, `--${key} requires a value`];
   const n = Number(val);
   if (Number.isNaN(n)) return [undefined, `--${key} must be a number, got '${val}'`];
   return [n, undefined];
