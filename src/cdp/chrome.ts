@@ -4,6 +4,7 @@ export interface ChromeProcess {
   pid: number;
   port: number;
   process: Deno.ChildProcess;
+  userDataDir: string;
 }
 
 export interface LaunchOptions {
@@ -99,7 +100,7 @@ export async function launchChrome(options?: LaunchOptions): Promise<ChromeProce
     stderr: "null",
   });
   const process = command.spawn();
-  const chrome: ChromeProcess = { pid: process.pid, port, process };
+  const chrome: ChromeProcess = { pid: process.pid, port, process, userDataDir };
 
   try {
     await waitForChrome(port);
@@ -111,7 +112,7 @@ export async function launchChrome(options?: LaunchOptions): Promise<ChromeProce
   return chrome;
 }
 
-/** Kill a Chrome process. */
+/** Kill a Chrome process and clean up its user data directory. */
 export async function killChrome(chrome: ChromeProcess): Promise<void> {
   try {
     chrome.process.kill("SIGTERM");
@@ -123,5 +124,10 @@ export async function killChrome(chrome: ChromeProcess): Promise<void> {
     await chrome.process.status;
   } catch {
     // Process already exited
+  }
+  try {
+    await Deno.remove(chrome.userDataDir, { recursive: true });
+  } catch {
+    // Best effort cleanup
   }
 }
