@@ -9,6 +9,7 @@
 # Loop continues until all issues are complete.
 
 set -e
+trap 'echo ""; echo "Interrupted."; exit 130' INT TERM
 
 if [ $# -eq 0 ]; then
     echo "Usage: ./ralph.sh \"<milestone-name>\""
