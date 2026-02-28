@@ -116,6 +116,7 @@ const deps: CliDeps = {
   isProcessAlive,
   killProcess,
   spawnDaemon,
+  sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   stdout: (s) => Deno.stdout.writeSync(encoder.encode(s)),
   stderr: (s) => Deno.stderr.writeSync(encoder.encode(s)),
 };

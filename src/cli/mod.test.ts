@@ -19,6 +19,7 @@ function stubDeps(overrides: Partial<CliDeps> = {}): CliDeps {
     isProcessAlive: () => true,
     killProcess: () => {},
     spawnDaemon: () => Promise.resolve({ pid: 456, port: 3222, cdpPort: 9234 }),
+    sleep: () => Promise.resolve(),
     stdout: () => {},
     stderr: () => {},
     ...overrides,
@@ -342,59 +343,6 @@ Deno.test("screenshot with no daemon returns error", async () => {
 
 // --- stop ---
 
-Deno.test("stop sends POST /shutdown and removes PID file", async () => {
-  let fetchUrl = "";
-  let fetchMethod = "";
-  let pidRemoved = false;
-  const io = capture();
-  const code = await runCli(
-    ["stop"],
-    stubDeps({
-      fetch: ((input: string | URL | Request, init?: RequestInit) => {
-        fetchUrl = typeof input === "string" ? input : input.toString();
-        fetchMethod = init?.method ?? "GET";
-        return Promise.resolve(jsonResponse({ ok: true }));
-      }) as typeof globalThis.fetch,
-      removePidFile: () => {
-        pidRemoved = true;
-        return Promise.resolve();
-      },
-      stdout: io.stdout,
-    }),
-  );
-  assertEquals(code, 0);
-  assertEquals(fetchUrl, "http://127.0.0.1:3222/shutdown");
-  assertEquals(fetchMethod, "POST");
-  assertEquals(pidRemoved, true);
-  assertStringIncludes(io.out, "daemon stopped");
-});
-
-Deno.test("stop cleans PID file without kill when daemon unreachable", async () => {
-  let killCalled = false;
-  let pidRemoved = false;
-  const io = capture();
-  const code = await runCli(
-    ["stop"],
-    stubDeps({
-      fetch: () => Promise.reject(new Error("connection refused")),
-      killProcess: () => {
-        killCalled = true;
-      },
-      removePidFile: () => {
-        pidRemoved = true;
-        return Promise.resolve();
-      },
-      stdout: io.stdout,
-      stderr: io.stderr,
-    }),
-  );
-  assertEquals(code, 0);
-  assertEquals(killCalled, false);
-  assertEquals(pidRemoved, true);
-  assertStringIncludes(io.out, "daemon stopped");
-  assertStringIncludes(io.err, "stale PID file");
-});
-
 Deno.test("stop with no daemon returns error", async () => {
   const io = capture();
   const code = await runCli(
@@ -406,6 +354,115 @@ Deno.test("stop with no daemon returns error", async () => {
   );
   assertEquals(code, 1);
   assertStringIncludes(io.err, "daemon is not running");
+});
+
+Deno.test("stop: shutdown OK + process exits → remove PID, exit 0", async () => {
+  let pidRemoved = false;
+  const io = capture();
+  const code = await runCli(
+    ["stop"],
+    stubDeps({
+      fetch: ((input: string | URL | Request, init?: RequestInit) => {
+        assertEquals(init?.method, "POST");
+        assertStringIncludes(
+          typeof input === "string" ? input : input.toString(),
+          "/shutdown",
+        );
+        return Promise.resolve(jsonResponse({ ok: true }));
+      }) as typeof globalThis.fetch,
+      isProcessAlive: () => false,
+      removePidFile: () => {
+        pidRemoved = true;
+        return Promise.resolve();
+      },
+      stdout: io.stdout,
+    }),
+  );
+  assertEquals(code, 0);
+  assertEquals(pidRemoved, true);
+  assertStringIncludes(io.out, "daemon stopped");
+});
+
+Deno.test("stop: shutdown OK + process still alive → keep PID, exit 1", async () => {
+  let pidRemoved = false;
+  const io = capture();
+  const code = await runCli(
+    ["stop"],
+    stubDeps({
+      fetch: () => Promise.resolve(jsonResponse({ ok: true })),
+      isProcessAlive: () => true,
+      removePidFile: () => {
+        pidRemoved = true;
+        return Promise.resolve();
+      },
+      stderr: io.stderr,
+    }),
+  );
+  assertEquals(code, 1);
+  assertEquals(pidRemoved, false);
+  assertStringIncludes(io.err, "still alive");
+});
+
+Deno.test("stop: unreachable + process dead → remove PID, exit 0", async () => {
+  let pidRemoved = false;
+  const io = capture();
+  const code = await runCli(
+    ["stop"],
+    stubDeps({
+      fetch: () => Promise.reject(new Error("connection refused")),
+      isProcessAlive: () => false,
+      removePidFile: () => {
+        pidRemoved = true;
+        return Promise.resolve();
+      },
+      stdout: io.stdout,
+    }),
+  );
+  assertEquals(code, 0);
+  assertEquals(pidRemoved, true);
+  assertStringIncludes(io.out, "daemon stopped");
+});
+
+Deno.test("stop: process exits after a few polls → remove PID, exit 0", async () => {
+  let pollCount = 0;
+  let pidRemoved = false;
+  const io = capture();
+  const code = await runCli(
+    ["stop"],
+    stubDeps({
+      fetch: () => Promise.resolve(jsonResponse({ ok: true })),
+      isProcessAlive: () => ++pollCount < 3,
+      removePidFile: () => {
+        pidRemoved = true;
+        return Promise.resolve();
+      },
+      stdout: io.stdout,
+    }),
+  );
+  assertEquals(code, 0);
+  assertEquals(pidRemoved, true);
+  assertEquals(pollCount, 3);
+  assertStringIncludes(io.out, "daemon stopped");
+});
+
+Deno.test("stop: unreachable + process still alive → keep PID, exit 1", async () => {
+  let pidRemoved = false;
+  const io = capture();
+  const code = await runCli(
+    ["stop"],
+    stubDeps({
+      fetch: () => Promise.reject(new Error("connection refused")),
+      isProcessAlive: () => true,
+      removePidFile: () => {
+        pidRemoved = true;
+        return Promise.resolve();
+      },
+      stderr: io.stderr,
+    }),
+  );
+  assertEquals(code, 1);
+  assertEquals(pidRemoved, false);
+  assertStringIncludes(io.err, "still alive");
 });
 
 // --- start ---

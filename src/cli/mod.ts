@@ -23,6 +23,7 @@ export interface CliDeps {
   isProcessAlive(pid: number): boolean;
   killProcess(pid: number): void;
   spawnDaemon(opts: StartOptions): Promise<PidFile>;
+  sleep(ms: number): Promise<void>;
   stdout(s: string): void;
   stderr(s: string): void;
 }
@@ -164,6 +165,9 @@ async function handleStart(args: string[], deps: CliDeps): Promise<number> {
   }
 }
 
+const STOP_POLL_INTERVAL_MS = 100;
+const STOP_TIMEOUT_MS = 5000;
+
 async function handleStop(deps: CliDeps): Promise<number> {
   const pf = await deps.readPidFile();
   if (!pf) {
@@ -179,15 +183,29 @@ async function handleStop(deps: CliDeps): Promise<number> {
       deps.stderr("warning: daemon returned non-ok on shutdown\n");
     }
   } catch {
-    // Daemon unreachable — either already dead or PID is stale.
-    // Do NOT SIGTERM: we cannot verify the PID still belongs to the daemon,
-    // so signaling it risks killing an unrelated process.
-    deps.stderr("warning: daemon unreachable, cleaning up stale PID file\n");
+    // Daemon unreachable — may be already dead or stale PID.
   }
 
-  await deps.removePidFile();
-  deps.stdout("daemon stopped\n");
-  return 0;
+  // Poll until process exits or timeout.
+  const maxPolls = STOP_TIMEOUT_MS / STOP_POLL_INTERVAL_MS;
+  for (let i = 0; i < maxPolls; i++) {
+    if (!deps.isProcessAlive(pf.pid)) {
+      await deps.removePidFile();
+      deps.stdout("daemon stopped\n");
+      return 0;
+    }
+    await deps.sleep(STOP_POLL_INTERVAL_MS);
+  }
+
+  // Final check after last sleep interval.
+  if (!deps.isProcessAlive(pf.pid)) {
+    await deps.removePidFile();
+    deps.stdout("daemon stopped\n");
+    return 0;
+  }
+
+  deps.stderr(`error: daemon process ${pf.pid} still alive after ${STOP_TIMEOUT_MS}ms\n`);
+  return 1;
 }
 
 async function handleNavigate(args: string[], deps: CliDeps): Promise<number> {
