@@ -1,14 +1,11 @@
-import type { EvalRequest, EvalResult } from "./eval.ts";
-import type { NavigateRequest, PageInfo } from "./page.ts";
+import type { EvalResult } from "./eval.ts";
 import type { SnapshotOptions, SnapshotResult } from "./snapshot.ts";
 
 /** Interface for browser control operations. Implemented by cdp/ adapter. */
 export interface BrowserService {
-  navigate(req: NavigateRequest): Promise<PageInfo>;
-  evaluate(req: EvalRequest): Promise<EvalResult>;
-  screenshot(name: string, fullPage?: boolean): Promise<string>;
-  listPages(): Promise<PageInfo[]>;
-  closePage(name: string): Promise<void>;
+  navigate(url: string): Promise<void>;
+  evaluate(expression: string): Promise<EvalResult>;
+  screenshot(fullPage?: boolean): Promise<string>;
 }
 
 /** Interface for page snapshot generation. Implemented by aria/ adapter. */

@@ -1,4 +1,4 @@
-const ADAPTER_MODULES = ["cdp", "aria", "http", "cli", "fs"] as const;
+const ADAPTER_MODULES = ["cdp", "aria", "cli", "fs"] as const;
 const ALL_MODULES = ["domain", ...ADAPTER_MODULES] as const;
 
 type Module = (typeof ALL_MODULES)[number];
@@ -7,7 +7,6 @@ const ALLOWED_IMPORTS: Record<Module, readonly Module[]> = {
   domain: [],
   cdp: ["domain"],
   aria: ["domain"],
-  http: ["domain"],
   cli: ["domain"],
   fs: ["domain"],
 };

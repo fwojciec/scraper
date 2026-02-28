@@ -14,12 +14,31 @@ interface TestContext {
   snapshots: SnapshotService;
 }
 
+async function discoverPageTarget(port: number): Promise<string> {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/json/list`);
+      if (res.ok) {
+        const targets = await res.json();
+        // deno-lint-ignore no-explicit-any
+        const pageTarget = targets.find((t: any) => t.type === "page");
+        if (pageTarget) return pageTarget.id;
+      } else {
+        await res.body?.cancel();
+      }
+    } catch { /* transport failure, retry */ }
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  throw new Error("no page target found");
+}
+
 async function setup(): Promise<TestContext> {
   const partial: Partial<TestContext> = {};
   try {
     partial.fixtures = startFixtureServer();
     partial.chrome = await launchChrome();
-    partial.browser = await createCdpConnection(partial.chrome.port);
+    const targetId = await discoverPageTarget(partial.chrome.port);
+    partial.browser = await createCdpConnection(partial.chrome.port, targetId);
     partial.snapshots = createSnapshotService();
     return partial as TestContext;
   } catch (err) {
@@ -40,9 +59,8 @@ async function teardown(ctx: Partial<TestContext>) {
   } catch { /* already closed */ }
 }
 
-function evaluateInPage(browser: CdpBrowserService, pageName: string) {
-  return (expression: string) =>
-    browser.evaluate({ name: pageName, expression }).then((r) => r.result as unknown);
+function evaluateInPage(browser: CdpBrowserService) {
+  return (expression: string) => browser.evaluate(expression).then((r) => r.result as unknown);
 }
 
 // --- Snapshot integration tests ---
@@ -50,13 +68,10 @@ function evaluateInPage(browser: CdpBrowserService, pageName: string) {
 Deno.test("snapshot: bestseller table has expected ARIA structure", async () => {
   const ctx = await setup();
   try {
-    await ctx.browser.navigate({
-      url: ctx.fixtures.url("bestseller-table.html"),
-      name: "table",
-    });
+    await ctx.browser.navigate(ctx.fixtures.url("bestseller-table.html"));
     const result = await ctx.snapshots.snapshot(
-      { name: "table" },
-      evaluateInPage(ctx.browser, "table"),
+      {},
+      evaluateInPage(ctx.browser),
     );
 
     // Verify heading
@@ -89,13 +104,10 @@ Deno.test("snapshot: bestseller table has expected ARIA structure", async () => 
 Deno.test("snapshot: JS-rendered page has dynamically created content", async () => {
   const ctx = await setup();
   try {
-    await ctx.browser.navigate({
-      url: ctx.fixtures.url("js-rendered.html"),
-      name: "jspage",
-    });
+    await ctx.browser.navigate(ctx.fixtures.url("js-rendered.html"));
     const result = await ctx.snapshots.snapshot(
-      { name: "jspage" },
-      evaluateInPage(ctx.browser, "jspage"),
+      {},
+      evaluateInPage(ctx.browser),
     );
 
     // Verify JS-rendered DOM structure (article + heading roles prove script executed;
@@ -122,13 +134,8 @@ Deno.test("snapshot: JS-rendered page has dynamically created content", async ()
 Deno.test("eval: extract table data from bestseller fixture", async () => {
   const ctx = await setup();
   try {
-    await ctx.browser.navigate({
-      url: ctx.fixtures.url("bestseller-table.html"),
-      name: "eval-table",
-    });
-    const result = await ctx.browser.evaluate({
-      name: "eval-table",
-      expression: `
+    await ctx.browser.navigate(ctx.fixtures.url("bestseller-table.html"));
+    const result = await ctx.browser.evaluate(`
         Array.from(document.querySelectorAll("tbody tr")).map(row => {
           const cells = row.querySelectorAll("td");
           return {
@@ -138,8 +145,7 @@ Deno.test("eval: extract table data from bestseller fixture", async () => {
             price: cells[3].textContent.trim(),
           };
         })
-      `,
-    });
+      `);
 
     assertEquals(result.result, [
       { rank: 1, title: "Dune", author: "Frank Herbert", price: "$12.99" },
@@ -154,19 +160,13 @@ Deno.test("eval: extract table data from bestseller fixture", async () => {
 Deno.test("eval: extract JS-rendered review data", async () => {
   const ctx = await setup();
   try {
-    await ctx.browser.navigate({
-      url: ctx.fixtures.url("js-rendered.html"),
-      name: "eval-js",
-    });
-    const result = await ctx.browser.evaluate({
-      name: "eval-js",
-      expression: `
+    await ctx.browser.navigate(ctx.fixtures.url("js-rendered.html"));
+    const result = await ctx.browser.evaluate(`
         Array.from(document.querySelectorAll("article")).map(article => ({
           user: article.querySelector("h2").textContent,
           text: article.querySelectorAll("p")[1].textContent,
         }))
-      `,
-    });
+      `);
 
     assertEquals(result.result, [
       { user: "Alice", text: "Excellent product!" },

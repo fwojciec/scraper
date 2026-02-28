@@ -1,15 +1,7 @@
-/** CDP connection implementing BrowserService. */
+/** CDP connection implementing BrowserService for a single target. */
 
 import type { BrowserService } from "../domain/browser.ts";
-import type { EvalRequest, EvalResult } from "../domain/eval.ts";
-import type { NavigateRequest, PageInfo } from "../domain/page.ts";
-
-interface ManagedPage {
-  name: string;
-  targetId: string;
-  sessionId: string;
-  url: string;
-}
+import type { EvalResult } from "../domain/eval.ts";
 
 export interface CdpBrowserService extends BrowserService {
   close(): void;
@@ -36,20 +28,34 @@ async function discoverWsUrl(port: number): Promise<string> {
   return info.webSocketDebuggerUrl;
 }
 
-/** Create a CDP connection to Chrome on the given port and return a BrowserService. */
-export async function createCdpConnection(port: number): Promise<CdpBrowserService> {
+/** Create a CDP connection to Chrome on the given port, attaching to a specific target. */
+export async function createCdpConnection(
+  port: number,
+  targetId: string,
+): Promise<CdpBrowserService> {
   const wsUrl = await discoverWsUrl(port);
   const { CDP } = await loadCdp();
   const cdp = new CDP({ webSocketDebuggerUrl: wsUrl });
 
-  // Enable Target domain
-  await cdp.Target.setDiscoverTargets({ discover: true });
+  let sessionId: string;
+  try {
+    const result = await cdp.Target.attachToTarget({
+      targetId,
+      flatten: true,
+    });
+    sessionId = result.sessionId;
+  } catch {
+    try {
+      cdp.connection?.close();
+    } catch { /* ignore */ }
+    throw new Error("target no longer exists — run 'scraper stop' then 'scraper start'");
+  }
 
-  const pages = new Map<string, ManagedPage>();
-  const pending = new Map<string, Promise<PageInfo>>();
+  await cdp.Page.enable(null, sessionId);
+  await cdp.Runtime.enable(null, sessionId);
 
   // deno-lint-ignore no-explicit-any
-  async function waitForLoad(cdpClient: any, sessionId: string): Promise<void> {
+  async function waitForLoad(cdpClient: any, sid: string): Promise<void> {
     await cdpClient.Runtime.evaluate(
       {
         expression: `new Promise(r => {
@@ -59,75 +65,25 @@ export async function createCdpConnection(port: number): Promise<CdpBrowserServi
         awaitPromise: true,
         returnByValue: true,
       },
-      sessionId,
+      sid,
     );
   }
 
-  function getPage(name: string): ManagedPage {
-    const page = pages.get(name);
-    if (!page) throw new Error(`No page named "${name}"`);
-    return page;
-  }
-
-  async function doNavigate(req: NavigateRequest, name: string): Promise<PageInfo> {
-    const existing = pages.get(name);
-
-    if (existing) {
-      await cdp.Page.navigate({ url: req.url }, existing.sessionId);
-      if (req.url !== "about:blank") {
-        await waitForLoad(cdp, existing.sessionId);
-      }
-      existing.url = req.url;
-      return { name, url: req.url, targetId: existing.targetId };
-    }
-
-    // Create target at about:blank, attach and enable domains, then navigate.
-    // This avoids a race where the load event fires before we listen.
-    const { targetId } = await cdp.Target.createTarget({ url: "about:blank" });
-
-    const { sessionId } = await cdp.Target.attachToTarget({
-      targetId,
-      flatten: true,
-    });
-
-    await cdp.Page.enable(null, sessionId);
-    await cdp.Runtime.enable(null, sessionId);
-
-    if (req.url !== "about:blank") {
-      await cdp.Page.navigate({ url: req.url }, sessionId);
+  async function navigate(url: string): Promise<void> {
+    await cdp.Page.navigate({ url }, sessionId);
+    if (url !== "about:blank") {
       await waitForLoad(cdp, sessionId);
     }
-
-    const page: ManagedPage = { name, targetId, sessionId, url: req.url };
-    pages.set(name, page);
-
-    return { name, url: req.url, targetId };
   }
 
-  // Serialize navigations per name to prevent concurrent target creation races.
-  async function navigate(req: NavigateRequest): Promise<PageInfo> {
-    const name = req.name ?? "default";
-    const inflight = pending.get(name);
-    const task = (inflight ?? Promise.resolve()).then(() => doNavigate(req, name));
-    pending.set(name, task);
-    try {
-      return await task;
-    } finally {
-      if (pending.get(name) === task) pending.delete(name);
-    }
-  }
-
-  async function evaluate(req: EvalRequest): Promise<EvalResult> {
-    const name = req.name ?? "default";
-    const page = getPage(name);
-
+  async function evaluate(expression: string): Promise<EvalResult> {
     const response = await cdp.Runtime.evaluate(
       {
-        expression: req.expression,
+        expression,
         returnByValue: true,
         awaitPromise: true,
       },
-      page.sessionId,
+      sessionId,
     );
 
     if (response.exceptionDetails) {
@@ -140,14 +96,12 @@ export async function createCdpConnection(port: number): Promise<CdpBrowserServi
     return { result: response.result.value };
   }
 
-  async function screenshot(name: string, fullPage?: boolean): Promise<string> {
-    const page = getPage(name);
-
+  async function screenshot(fullPage?: boolean): Promise<string> {
     let clip:
       | { x: number; y: number; width: number; height: number; scale: number }
       | undefined;
     if (fullPage) {
-      const metrics = await cdp.Page.getLayoutMetrics(null, page.sessionId);
+      const metrics = await cdp.Page.getLayoutMetrics(null, sessionId);
       clip = {
         x: 0,
         y: 0,
@@ -159,27 +113,12 @@ export async function createCdpConnection(port: number): Promise<CdpBrowserServi
 
     const { data } = await cdp.Page.captureScreenshot(
       { format: "png", ...(clip ? { clip } : {}) },
-      page.sessionId,
+      sessionId,
     );
 
     const path = await Deno.makeTempFile({ suffix: ".png" });
     await Deno.writeFile(path, Uint8Array.from(atob(data), (c) => c.charCodeAt(0)));
     return path;
-  }
-
-  function listPages(): Promise<PageInfo[]> {
-    const result = [...pages.values()].map((p) => ({
-      name: p.name,
-      url: p.url,
-      targetId: p.targetId,
-    }));
-    return Promise.resolve(result);
-  }
-
-  async function closePage(name: string): Promise<void> {
-    const page = getPage(name);
-    await cdp.Target.closeTarget({ targetId: page.targetId });
-    pages.delete(name);
   }
 
   function close(): void {
@@ -190,5 +129,5 @@ export async function createCdpConnection(port: number): Promise<CdpBrowserServi
     }
   }
 
-  return { navigate, evaluate, screenshot, listPages, closePage, close };
+  return { navigate, evaluate, screenshot, close };
 }

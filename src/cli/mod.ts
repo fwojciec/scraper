@@ -1,36 +1,27 @@
-// Adapter: CLI (Deno.args). Stateless HTTP client to daemon.
+// Adapter: CLI (Deno.args). Direct CDP operations, no HTTP server.
 
-/** PID file format written by the daemon and read by CLI commands. */
-export interface PidFile {
-  pid: number;
-  port: number;
+import type { SnapshotOptions, SnapshotResult } from "../domain/mod.ts";
+
+/** Result of starting Chrome. */
+export interface StartResult {
+  status: "started" | "already_running";
+  chromePid: number;
   cdpPort: number;
 }
 
 /** Options for the start command. */
 export interface StartOptions {
-  port: number;
   chromePath?: string;
-  evalTimeout?: number;
-}
-
-/** A cancellable timer that rejects on expiry. */
-export interface Timeout {
-  promise: Promise<never>;
-  cancel(): void;
 }
 
 /** Dependencies injected from main.ts composition root. */
 export interface CliDeps {
-  fetch: typeof globalThis.fetch;
-  readPidFile(): Promise<PidFile | null>;
-  writePidFile(pf: PidFile): Promise<void>;
-  removePidFile(): Promise<void>;
-  isProcessAlive(pid: number): boolean;
-  killProcess(pid: number): void;
-  spawnDaemon(opts: StartOptions): Promise<PidFile>;
-  startTimeout(ms: number): Timeout;
-  sleep(ms: number): Promise<void>;
+  startChrome(opts: StartOptions): Promise<StartResult>;
+  stopChrome(): Promise<void>;
+  navigate(url: string): Promise<void>;
+  snapshot(opts: SnapshotOptions): Promise<SnapshotResult>;
+  evaluate(expression: string): Promise<{ result: unknown }>;
+  screenshot(fullPage?: boolean): Promise<string>;
   stdout(s: string): void;
   stderr(s: string): void;
 }
@@ -38,12 +29,11 @@ export interface CliDeps {
 const USAGE = `Usage: scraper <command> [options]
 
 Commands:
-  start       Launch the daemon (Chrome + HTTP server)
-  stop        Stop the daemon
-  navigate    Navigate a page to a URL
-  pages       List open pages
+  start       Launch Chrome
+  stop        Stop Chrome
+  navigate    Navigate to a URL
   snapshot    Generate an ARIA snapshot
-  eval        Evaluate JavaScript in a page
+  eval        Evaluate JavaScript
   screenshot  Capture a screenshot
 `;
 
@@ -96,265 +86,111 @@ function flagBoolean(flags: Record<string, string | true>, key: string): boolean
   return flags[key] === true;
 }
 
-async function daemonFetch(
-  deps: CliDeps,
-  path: string,
-  init?: RequestInit,
-): Promise<Response | null> {
-  const pf = await deps.readPidFile();
-  if (!pf) {
-    deps.stderr("error: daemon is not running (no PID file)\n");
-    return null;
-  }
-  try {
-    return await deps.fetch(`http://127.0.0.1:${pf.port}${path}`, init);
-  } catch (err) {
-    deps.stderr(
-      `error: cannot connect to daemon: ${err instanceof Error ? err.message : err}\n`,
-    );
-    return null;
-  }
-}
-
-async function handleDaemonResponse(
-  deps: CliDeps,
-  res: Response,
-): Promise<unknown | null> {
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({ error: "unknown error" }));
-    deps.stderr(`error: ${body.error ?? "unknown error"}\n`);
-    return null;
-  }
-  return await res.json();
-}
-
 async function handleStart(args: string[], deps: CliDeps): Promise<number> {
   const { flags } = parseFlags(args);
-  const [port = 3222, portErr] = flagNumber(flags, "port");
-  if (portErr) {
-    deps.stderr(`error: ${portErr}\n`);
-    return 1;
-  }
   const chromePath = flagString(flags, "chrome-path");
-  const [evalTimeout, etErr] = flagNumber(flags, "eval-timeout");
-  if (etErr) {
-    deps.stderr(`error: ${etErr}\n`);
-    return 1;
-  }
 
-  const existing = await deps.readPidFile();
-  if (existing) {
-    if (deps.isProcessAlive(existing.pid)) {
-      deps.stdout(
-        `daemon already running (pid ${existing.pid}, port ${existing.port})\n`,
-      );
-      return 0;
-    }
-    await deps.removePidFile();
-  }
-
-  let pf: PidFile | undefined;
   try {
-    pf = await deps.spawnDaemon({ port, chromePath, evalTimeout });
-    await deps.writePidFile(pf);
-    deps.stdout(`daemon started (pid ${pf.pid}, port ${pf.port})\n`);
+    const result = await deps.startChrome({ chromePath });
+    if (result.status === "already_running") {
+      deps.stdout(`chrome already running (pid ${result.chromePid})\n`);
+    } else {
+      deps.stdout(
+        `chrome started (pid ${result.chromePid}, cdp port ${result.cdpPort})\n`,
+      );
+    }
     return 0;
   } catch (err) {
-    if (pf) {
-      try {
-        deps.killProcess(pf.pid);
-      } catch { /* already dead */ }
-    }
     deps.stderr(
-      `error: failed to start daemon: ${err instanceof Error ? err.message : err}\n`,
+      `error: failed to start chrome: ${err instanceof Error ? err.message : err}\n`,
     );
     return 1;
   }
 }
 
-const STOP_POLL_INTERVAL_MS = 100;
-const STOP_TIMEOUT_MS = 5000;
-
 async function handleStop(deps: CliDeps): Promise<number> {
-  const pf = await deps.readPidFile();
-  if (!pf) {
-    deps.stderr("error: daemon is not running (no PID file)\n");
+  try {
+    await deps.stopChrome();
+    deps.stdout("chrome stopped\n");
+    return 0;
+  } catch (err) {
+    deps.stderr(`error: ${err instanceof Error ? err.message : err}\n`);
     return 1;
   }
-
-  const abort = new AbortController();
-  const timeout = deps.startTimeout(STOP_TIMEOUT_MS);
-  try {
-    const res = await Promise.race([
-      deps.fetch(`http://127.0.0.1:${pf.port}/shutdown`, {
-        method: "POST",
-        signal: abort.signal,
-      }),
-      timeout.promise,
-    ]);
-    if (!res.ok) {
-      deps.stderr("warning: daemon returned non-ok on shutdown\n");
-    }
-  } catch {
-    abort.abort();
-    // Daemon unreachable or timed out — may be already dead or stale PID.
-  } finally {
-    timeout.cancel();
-  }
-
-  // Poll until process exits or timeout.
-  const maxPolls = STOP_TIMEOUT_MS / STOP_POLL_INTERVAL_MS;
-  for (let i = 0; i < maxPolls; i++) {
-    if (!deps.isProcessAlive(pf.pid)) {
-      await deps.removePidFile();
-      deps.stdout("daemon stopped\n");
-      return 0;
-    }
-    await deps.sleep(STOP_POLL_INTERVAL_MS);
-  }
-
-  // Final check after last sleep interval.
-  if (!deps.isProcessAlive(pf.pid)) {
-    await deps.removePidFile();
-    deps.stdout("daemon stopped\n");
-    return 0;
-  }
-
-  deps.stderr(`error: daemon process ${pf.pid} still alive after ${STOP_TIMEOUT_MS}ms\n`);
-  return 1;
 }
 
 async function handleNavigate(args: string[], deps: CliDeps): Promise<number> {
-  const { positional, flags } = parseFlags(args);
+  const { positional } = parseFlags(args);
   const url = positional[0];
   if (!url) {
-    deps.stderr("error: url is required\nUsage: scraper navigate <url> [--name N]\n");
+    deps.stderr("error: url is required\nUsage: scraper navigate <url>\n");
     return 1;
   }
-  const name = flagString(flags, "name");
-  const body: Record<string, unknown> = { url };
-  if (name) body.name = name;
 
-  const res = await daemonFetch(deps, "/pages", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!res) return 1;
-
-  const data = await handleDaemonResponse(deps, res);
-  if (!data) return 1;
-
-  const page = data as { name: string; url: string };
-  deps.stdout(`${page.name}\t${page.url}\n`);
-  return 0;
-}
-
-async function handlePages(deps: CliDeps): Promise<number> {
-  const res = await daemonFetch(deps, "/pages");
-  if (!res) return 1;
-
-  const data = await handleDaemonResponse(deps, res);
-  if (!data) return 1;
-
-  const pages = data as Array<{ name: string; url: string }>;
-  if (pages.length === 0) {
-    deps.stdout("(no pages)\n");
+  try {
+    await deps.navigate(url);
+    deps.stdout(`navigated to ${url}\n`);
     return 0;
+  } catch (err) {
+    deps.stderr(`error: ${err instanceof Error ? err.message : err}\n`);
+    return 1;
   }
-
-  const nameWidth = Math.max(4, ...pages.map((p) => p.name.length));
-  deps.stdout(`${"NAME".padEnd(nameWidth)}  URL\n`);
-  for (const p of pages) {
-    deps.stdout(`${p.name.padEnd(nameWidth)}  ${p.url}\n`);
-  }
-  return 0;
 }
 
 async function handleSnapshot(args: string[], deps: CliDeps): Promise<number> {
   const { flags } = parseFlags(args);
-  const body: Record<string, unknown> = {};
-  const name = flagString(flags, "name");
-  if (name) body.name = name;
   const [maxDepth, mdErr] = flagNumber(flags, "max-depth");
   if (mdErr) {
     deps.stderr(`error: ${mdErr}\n`);
     return 1;
   }
-  if (maxDepth !== undefined) body.maxDepth = maxDepth;
   const [maxNodes, mnErr] = flagNumber(flags, "max-nodes");
   if (mnErr) {
     deps.stderr(`error: ${mnErr}\n`);
     return 1;
   }
-  if (maxNodes !== undefined) body.maxNodes = maxNodes;
   const selector = flagString(flags, "selector");
-  if (selector) body.selector = selector;
 
-  const res = await daemonFetch(deps, "/snapshot", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!res) return 1;
-
-  const data = await handleDaemonResponse(deps, res);
-  if (!data) return 1;
-
-  const { yaml } = data as { yaml: string };
-  deps.stdout(yaml);
-  return 0;
+  try {
+    const result = await deps.snapshot({ maxDepth, maxNodes, selector });
+    deps.stdout(result.yaml);
+    return 0;
+  } catch (err) {
+    deps.stderr(`error: ${err instanceof Error ? err.message : err}\n`);
+    return 1;
+  }
 }
 
 async function handleEval(args: string[], deps: CliDeps): Promise<number> {
-  const { positional, flags } = parseFlags(args);
+  const { positional } = parseFlags(args);
   const expression = positional[0];
   if (!expression) {
-    deps.stderr(
-      "error: expression is required\nUsage: scraper eval '<expression>' [--name N]\n",
-    );
+    deps.stderr("error: expression is required\nUsage: scraper eval '<expression>'\n");
     return 1;
   }
-  const name = flagString(flags, "name");
-  const body: Record<string, unknown> = { expression };
-  if (name) body.name = name;
 
-  const res = await daemonFetch(deps, "/eval", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!res) return 1;
-
-  const data = await handleDaemonResponse(deps, res);
-  if (!data) return 1;
-
-  const { result } = data as { result: unknown };
-  deps.stdout(JSON.stringify(result, null, 2) + "\n");
-  return 0;
+  try {
+    const { result } = await deps.evaluate(expression);
+    deps.stdout(JSON.stringify(result, null, 2) + "\n");
+    return 0;
+  } catch (err) {
+    deps.stderr(`error: ${err instanceof Error ? err.message : err}\n`);
+    return 1;
+  }
 }
 
 async function handleScreenshot(args: string[], deps: CliDeps): Promise<number> {
   const { flags } = parseFlags(args);
-  const name = flagString(flags, "name");
   const fullPage = flagBoolean(flags, "full-page");
-  const body: Record<string, unknown> = {};
-  if (name) body.name = name;
-  if (fullPage) body.fullPage = true;
 
-  const res = await daemonFetch(deps, "/screenshot", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!res) return 1;
-
-  const data = await handleDaemonResponse(deps, res);
-  if (!data) return 1;
-
-  const { path } = data as { path: string };
-  deps.stdout(path + "\n");
-  return 0;
+  try {
+    const path = await deps.screenshot(fullPage || undefined);
+    deps.stdout(path + "\n");
+    return 0;
+  } catch (err) {
+    deps.stderr(`error: ${err instanceof Error ? err.message : err}\n`);
+    return 1;
+  }
 }
 
 /** Run the CLI with the given arguments and dependencies. Returns exit code. */
@@ -373,8 +209,6 @@ export function runCli(args: string[], deps: CliDeps): Promise<number> {
       return handleStop(deps);
     case "navigate":
       return handleNavigate(rest, deps);
-    case "pages":
-      return handlePages(deps);
     case "snapshot":
       return handleSnapshot(rest, deps);
     case "eval":

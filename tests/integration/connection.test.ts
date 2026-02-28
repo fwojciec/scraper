@@ -3,173 +3,136 @@ import { type ChromeProcess, killChrome, launchChrome } from "../../src/cdp/chro
 import { type CdpBrowserService, createCdpConnection } from "../../src/cdp/connection.ts";
 
 let chrome: ChromeProcess;
-let browser: CdpBrowserService;
+let targetId: string;
 
-async function setup() {
-  chrome = await launchChrome();
-  browser = await createCdpConnection(chrome.port);
+/** Discover the initial page target from /json/list with retries. */
+async function discoverPageTarget(port: number): Promise<string> {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/json/list`);
+      if (res.ok) {
+        const targets = await res.json();
+        // deno-lint-ignore no-explicit-any
+        const pageTarget = targets.find((t: any) => t.type === "page");
+        if (pageTarget) return pageTarget.id;
+      } else {
+        await res.body?.cancel();
+      }
+    } catch { /* transport failure, retry */ }
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  throw new Error("no page target found");
 }
 
-async function teardown() {
+/** Launch Chrome and discover the initial page target. */
+async function setup(): Promise<CdpBrowserService> {
+  chrome = await launchChrome();
+  targetId = await discoverPageTarget(chrome.port);
+  return await createCdpConnection(chrome.port, targetId);
+}
+
+async function teardown(browser?: CdpBrowserService) {
   try {
     browser?.close();
   } catch { /* connection may not have been established */ }
   await killChrome(chrome);
 }
 
-Deno.test("navigate opens a page and returns PageInfo", async () => {
-  await setup();
+Deno.test("navigate loads a page", async () => {
+  const browser = await setup();
   try {
-    const info = await browser.navigate({ url: "about:blank", name: "test" });
-    assertEquals(info.name, "test");
-    assertEquals(info.url, "about:blank");
-    assertEquals(typeof info.targetId, "string");
+    await browser.navigate("about:blank");
   } finally {
-    await teardown();
+    await teardown(browser);
   }
 });
 
-Deno.test("navigate defaults name to 'default'", async () => {
-  await setup();
+Deno.test("navigate loads a real page and waits for load", async () => {
+  const browser = await setup();
   try {
-    const info = await browser.navigate({ url: "about:blank" });
-    assertEquals(info.name, "default");
+    const url = "data:text/html,<h1>Hello</h1>";
+    await browser.navigate(url);
+    const result = await browser.evaluate(
+      "document.querySelector('h1').textContent",
+    );
+    assertEquals(result.result, "Hello");
   } finally {
-    await teardown();
-  }
-});
-
-Deno.test("navigate reuses existing page with same name", async () => {
-  await setup();
-  try {
-    const first = await browser.navigate({ url: "about:blank", name: "reuse" });
-    const second = await browser.navigate({ url: "about:blank", name: "reuse" });
-    assertEquals(first.targetId, second.targetId);
-  } finally {
-    await teardown();
+    await teardown(browser);
   }
 });
 
 Deno.test("evaluate runs JS and returns result", async () => {
-  await setup();
+  const browser = await setup();
   try {
-    await browser.navigate({ url: "about:blank", name: "eval-test" });
-    const result = await browser.evaluate({ name: "eval-test", expression: "1 + 2" });
+    await browser.navigate("about:blank");
+    const result = await browser.evaluate("1 + 2");
     assertEquals(result.result, 3);
   } finally {
-    await teardown();
+    await teardown(browser);
   }
 });
 
 Deno.test("evaluate returns complex objects by value", async () => {
-  await setup();
+  const browser = await setup();
   try {
-    await browser.navigate({ url: "about:blank", name: "obj-test" });
-    const result = await browser.evaluate({
-      name: "obj-test",
-      expression: "({a: 1, b: [2, 3]})",
-    });
+    await browser.navigate("about:blank");
+    const result = await browser.evaluate("({a: 1, b: [2, 3]})");
     assertEquals(result.result, { a: 1, b: [2, 3] });
   } finally {
-    await teardown();
-  }
-});
-
-Deno.test("listPages returns all named pages", async () => {
-  await setup();
-  try {
-    await browser.navigate({ url: "about:blank", name: "page-a" });
-    await browser.navigate({ url: "about:blank", name: "page-b" });
-    const pages = await browser.listPages();
-    const names = pages.map((p) => p.name).sort();
-    assertEquals(names.includes("page-a"), true);
-    assertEquals(names.includes("page-b"), true);
-    assertGreater(pages.length, 1);
-  } finally {
-    await teardown();
-  }
-});
-
-Deno.test("closePage removes a named page", async () => {
-  await setup();
-  try {
-    await browser.navigate({ url: "about:blank", name: "ephemeral" });
-    await browser.closePage("ephemeral");
-    const pages = await browser.listPages();
-    const names = pages.map((p) => p.name);
-    assertEquals(names.includes("ephemeral"), false);
-  } finally {
-    await teardown();
-  }
-});
-
-Deno.test("closePage throws for unknown page", async () => {
-  await setup();
-  try {
-    await assertRejects(
-      () => browser.closePage("nonexistent"),
-      Error,
-      "nonexistent",
-    );
-  } finally {
-    await teardown();
+    await teardown(browser);
   }
 });
 
 Deno.test("screenshot returns a valid png file path", async () => {
-  await setup();
+  const browser = await setup();
   try {
-    await browser.navigate({ url: "about:blank", name: "snap" });
-    const path = await browser.screenshot("snap");
+    await browser.navigate("about:blank");
+    const path = await browser.screenshot();
     assert(path.endsWith(".png"));
     const stat = await Deno.stat(path);
     assertGreater(stat.size, 0);
     await Deno.remove(path);
   } finally {
-    await teardown();
+    await teardown(browser);
   }
 });
 
-Deno.test("navigate loads a real page and waits for load", async () => {
-  await setup();
+Deno.test("reconnect: new connection to same target works", async () => {
+  const browserA = await setup();
   try {
-    const url = "data:text/html,<h1>Hello</h1>";
-    const info = await browser.navigate({ url, name: "real" });
-    assertEquals(info.name, "real");
-    const result = await browser.evaluate({
-      name: "real",
-      expression: "document.querySelector('h1').textContent",
-    });
-    assertEquals(result.result, "Hello");
+    await browserA.navigate("data:text/html,<h1>Persisted</h1>");
+    browserA.close();
+
+    // Reconnect to same target
+    const browserB = await createCdpConnection(chrome.port, targetId);
+    try {
+      const result = await browserB.evaluate(
+        "document.querySelector('h1').textContent",
+      );
+      assertEquals(result.result, "Persisted");
+    } finally {
+      browserB.close();
+    }
   } finally {
     await teardown();
   }
 });
 
-Deno.test("concurrent navigates to same name do not leak targets", async () => {
-  await setup();
+Deno.test("stale target: clean error when target is gone", async () => {
+  const browser = await setup();
   try {
-    const [a, b] = await Promise.all([
-      browser.navigate({ url: "about:blank", name: "dup" }),
-      browser.navigate({ url: "about:blank", name: "dup" }),
-    ]);
-    // Both should resolve to the same target (second reuses first)
-    assertEquals(a.targetId, b.targetId);
-    const pages = await browser.listPages();
-    const dups = pages.filter((p) => p.name === "dup");
-    assertEquals(dups.length, 1);
-  } finally {
-    await teardown();
-  }
-});
+    browser.close();
 
-Deno.test("evaluate throws for unknown page", async () => {
-  await setup();
-  try {
+    // Close the target via Chrome's HTTP endpoint
+    const closeRes = await fetch(`http://127.0.0.1:${chrome.port}/json/close/${targetId}`);
+    await closeRes.body?.cancel();
+    // Wait a moment for Chrome to process
+    await new Promise((r) => setTimeout(r, 200));
+
     await assertRejects(
-      () => browser.evaluate({ name: "ghost", expression: "1" }),
+      () => createCdpConnection(chrome.port, targetId),
       Error,
-      "ghost",
+      "target no longer exists",
     );
   } finally {
     await teardown();

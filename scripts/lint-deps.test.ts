@@ -51,11 +51,11 @@ Deno.test("exemption: main.ts can import anything", () => {
 Deno.test("violation: nested relative import caught", () => {
   const diagnostics = Deno.lint.runPlugin(
     plugin,
-    "src/http/routes/handler.ts",
-    `import { connect } from "../../cdp/mod.ts";`,
+    "src/cli/handler.ts",
+    `import { connect } from "../cdp/mod.ts";`,
   );
   assertEquals(diagnostics.length, 1);
-  assertEquals(diagnostics[0].message, "http/ cannot import from cdp/ (allowed: [domain])");
+  assertEquals(diagnostics[0].message, "cli/ cannot import from cdp/ (allowed: [domain])");
 });
 
 Deno.test("violation: re-export caught (export * from)", () => {

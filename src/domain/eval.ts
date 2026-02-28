@@ -1,6 +1,5 @@
-/** Request to evaluate a JS expression in a page's browser context. */
+/** Request to evaluate a JS expression in the browser context. */
 export interface EvalRequest {
-  name?: string;
   expression: string;
 }
 
