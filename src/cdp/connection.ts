@@ -407,7 +407,7 @@ export async function createPageConnection(
         functionDeclaration: `function(val) {
           if (this.tagName !== 'SELECT') throw new Error('element is not a <select>');
           const option = Array.from(this.options).find(o => o.value === val);
-          if (!option) throw new Error('no option with value "' + val + '"');
+          if (!option) throw new Error('no option with value ' + JSON.stringify(val));
           this.value = val;
           this.dispatchEvent(new Event('input', { bubbles: true }));
           this.dispatchEvent(new Event('change', { bubbles: true }));

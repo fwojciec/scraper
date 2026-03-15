@@ -258,9 +258,6 @@ async function startAttach(channel?: string): Promise<StartResult> {
     }
   }
 
-  // New session = old refs are stale
-  await refsStore.remove();
-
   const userDataDir = defaultUserDataDir(channel);
   const { port, wsPath } = await readDevToolsActivePort(userDataDir);
   const wsUrl = buildBrowserWsUrl(port, wsPath);
@@ -672,6 +669,8 @@ const deps: CliDeps = {
       } else if (opts.target && "selector" in opts.target) {
         // Wait for element to exist
         await page.waitForSelector(opts.target.selector, timeoutMs);
+      } else if (opts.target && "ref" in opts.target) {
+        throw new Error("ref wait requires text");
       }
     });
   },

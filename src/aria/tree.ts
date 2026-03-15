@@ -139,7 +139,7 @@ function transformNode(
         const allText = children.every((c) => c.role === "text");
         if (allText) {
           // All text children — absorb into name
-          const text = children.map((c) => c.name).join("").trim();
+          const text = children.map((c) => c.name ?? "").join("").trim();
           if (text) node.name = text;
         } else {
           // Mixed children — show all
