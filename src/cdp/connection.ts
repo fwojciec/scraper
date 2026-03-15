@@ -159,12 +159,6 @@ export async function createPageConnection(
   cdp.Network.addEventListener("loadingFailed", (e: any) => {
     if (e.sessionId === sessionId) inflightRequests.delete(e.params.requestId);
   });
-  // Fallback terminal event for data URIs, cached responses, and service worker synthetic responses
-  // that may not fire loadingFinished/loadingFailed.
-  // deno-lint-ignore no-explicit-any
-  cdp.Network.addEventListener("responseReceived", (e: any) => {
-    if (e.sessionId === sessionId) inflightRequests.delete(e.params.requestId);
-  });
 
   // deno-lint-ignore no-explicit-any
   async function waitForLoad(cdpClient: any, sid: string): Promise<void> {
@@ -328,6 +322,9 @@ export async function createPageConnection(
 
   /** Click element at the given RemoteObjectId using real pointer events. */
   async function clickElement(objectId: string): Promise<void> {
+    // Ensure the element is visible in the viewport before computing coordinates
+    await cdp.DOM.scrollIntoViewIfNeeded({ objectId }, sessionId);
+
     // Get the element's content quads (coordinates)
     const { quads } = await cdp.DOM.getContentQuads(
       { objectId },

@@ -1,4 +1,5 @@
 import type { SnapshotResult } from "./snapshot.ts";
+import type { ElementTarget } from "./element.ts";
 
 /** Result of a mutating action (click, fill, navigate, etc.). */
 export interface ActionResult {
@@ -28,7 +29,7 @@ export interface ActionOptions {
  */
 export interface WaitOptions {
   /** Element to scope the wait to. */
-  target?: import("./element.ts").ElementTarget;
+  target?: ElementTarget;
   /** Text content to wait for (substring match). */
   text?: string;
   /** Timeout in ms (default 5000). */

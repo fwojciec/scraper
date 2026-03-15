@@ -490,32 +490,38 @@ async function withDialogHandling<T>(
   policy: DialogPolicy | undefined,
   fn: () => Promise<T>,
 ): Promise<T> {
-  let dialogError: Error | null = null;
-  let handlePromise: Promise<void> | null = null;
+  const dialogErrors: Error[] = [];
+  const handlePromises: Promise<void>[] = [];
 
   const cleanup = page.onDialog((_type, message) => {
     if (policy) {
-      handlePromise = page.handleDialog(
-        policy.action === "accept",
-        policy.action === "accept" ? policy.text : undefined,
-      ).catch((err) => {
-        dialogError = new Error(
-          `failed to handle dialog: ${err instanceof Error ? err.message : err}`,
-        );
-      });
+      handlePromises.push(
+        page.handleDialog(
+          policy.action === "accept",
+          policy.action === "accept" ? policy.text : undefined,
+        ).catch((err) => {
+          dialogErrors.push(
+            new Error(
+              `failed to handle dialog: ${err instanceof Error ? err.message : err}`,
+            ),
+          );
+        }),
+      );
     } else {
       // Dismiss to unblock the page, then signal error
-      handlePromise = page.handleDialog(false).catch(() => {});
-      dialogError = new Error(
-        `a dialog appeared: "${message}" — retry with --on-dialog accept|dismiss`,
+      handlePromises.push(page.handleDialog(false).catch(() => {}));
+      dialogErrors.push(
+        new Error(
+          `a dialog appeared: "${message}" — retry with --on-dialog accept|dismiss`,
+        ),
       );
     }
   });
 
   try {
     const result = await fn();
-    if (handlePromise) await handlePromise;
-    if (dialogError) throw dialogError;
+    await Promise.all(handlePromises);
+    if (dialogErrors.length) throw dialogErrors[0];
     return result;
   } finally {
     cleanup();
