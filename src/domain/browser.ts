@@ -10,8 +10,5 @@ export interface BrowserService {
 
 /** Interface for page snapshot generation. Implemented by aria/ adapter. */
 export interface SnapshotService {
-  snapshot(
-    options: SnapshotOptions,
-    evaluateInPage: (expression: string) => Promise<unknown>,
-  ): Promise<SnapshotResult>;
+  snapshot(options: SnapshotOptions): Promise<SnapshotResult>;
 }

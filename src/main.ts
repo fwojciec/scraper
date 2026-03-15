@@ -3,8 +3,9 @@
 
 import { type CliDeps, runCli, type StartOptions, type StartResult } from "./cli/mod.ts";
 import { type CdpBrowserService, createCdpConnection, launchChrome } from "./cdp/mod.ts";
-import { createSnapshotService } from "./aria/mod.ts";
+import { type AXNode, createSnapshotService } from "./aria/mod.ts";
 import { createJsonFileStore } from "./fs/mod.ts";
+import type { RefMap } from "./domain/mod.ts";
 
 const HOME = Deno.env.get("HOME");
 if (!HOME) throw new Error("HOME environment variable is not set");
@@ -18,6 +19,8 @@ interface ChromeState {
 }
 
 const stateStore = createJsonFileStore<ChromeState>(STATE_PATH);
+const REFS_PATH = `${HOME}/.scraper/refs.json`;
+const refsStore = createJsonFileStore<RefMap>(REFS_PATH);
 
 const encoder = new TextEncoder();
 
@@ -83,6 +86,7 @@ async function cleanupDeadChrome(state: ChromeState): Promise<void> {
     await Deno.remove(state.userDataDir, { recursive: true });
   } catch { /* best effort */ }
   await stateStore.remove();
+  await refsStore.remove();
 }
 
 /**
@@ -147,6 +151,9 @@ async function startChrome(opts: StartOptions): Promise<StartResult> {
     }
   }
 
+  // New session = old refs are stale
+  await refsStore.remove();
+
   // Launch Chrome
   const chrome = await launchChrome({
     chromePath: opts.chromePath,
@@ -197,8 +204,9 @@ async function stopChrome(): Promise<void> {
   }
 
   if (ownership === "foreign") {
-    // PID recycled — not our Chrome. Remove state file only.
+    // PID recycled — not our Chrome. Remove state file and refs.
     await stateStore.remove();
+    await refsStore.remove();
     return;
   }
 
@@ -275,8 +283,6 @@ async function withConnection<T>(
   }
 }
 
-const snapshotSvc = createSnapshotService();
-
 const deps: CliDeps = {
   startChrome,
   stopChrome,
@@ -285,9 +291,17 @@ const deps: CliDeps = {
   },
   snapshot(opts) {
     return withConnection(async (browser) => {
-      const evaluateInPage = (expression: string) =>
-        browser.evaluate(expression).then((r) => r.result as unknown);
-      return await snapshotSvc.snapshot(opts, evaluateInPage);
+      const snapshotSvc = createSnapshotService({
+        async getFullAXTree() {
+          return await browser.getFullAXTree() as AXNode[];
+        },
+        async resolveSelector(selector: string) {
+          return await browser.resolveSelector(selector);
+        },
+      });
+      const result = await snapshotSvc.snapshot(opts);
+      await refsStore.write(result.refs);
+      return result;
     });
   },
   evaluate(expression: string) {

@@ -5,6 +5,9 @@ import type { EvalResult } from "../domain/eval.ts";
 
 export interface CdpBrowserService extends BrowserService {
   close(): void;
+  // deno-lint-ignore no-explicit-any
+  getFullAXTree(): Promise<any>;
+  resolveSelector(selector: string): Promise<number>;
 }
 
 // simple-cdp's JSR .d.ts incorrectly uses `export type` for value exports.
@@ -53,6 +56,8 @@ export async function createCdpConnection(
 
   await cdp.Page.enable(null, sessionId);
   await cdp.Runtime.enable(null, sessionId);
+  await cdp.Accessibility.enable(null, sessionId);
+  await cdp.DOM.enable(null, sessionId);
 
   // deno-lint-ignore no-explicit-any
   async function waitForLoad(cdpClient: any, sid: string): Promise<void> {
@@ -121,6 +126,45 @@ export async function createCdpConnection(
     return path;
   }
 
+  // deno-lint-ignore no-explicit-any
+  async function getFullAXTree(): Promise<any> {
+    const response = await cdp.Accessibility.getFullAXTree(null, sessionId);
+    return response.nodes;
+  }
+
+  async function resolveSelector(selector: string): Promise<number> {
+    const evalResult = await cdp.Runtime.evaluate(
+      {
+        expression: `document.querySelector(${JSON.stringify(selector)})`,
+        returnByValue: false,
+      },
+      sessionId,
+    );
+
+    if (evalResult.exceptionDetails) {
+      const msg = evalResult.exceptionDetails.text ??
+        evalResult.exceptionDetails.exception?.description ??
+        "querySelector failed";
+      throw new Error(msg);
+    }
+
+    if (
+      !evalResult.result.objectId ||
+      evalResult.result.subtype === "null"
+    ) {
+      throw new Error(
+        `selector "${selector}" did not match any element`,
+      );
+    }
+
+    const desc = await cdp.DOM.describeNode(
+      { objectId: evalResult.result.objectId },
+      sessionId,
+    );
+
+    return desc.node.backendNodeId;
+  }
+
   function close(): void {
     try {
       cdp.connection?.close();
@@ -129,5 +173,5 @@ export async function createCdpConnection(
     }
   }
 
-  return { navigate, evaluate, screenshot, close };
+  return { navigate, evaluate, screenshot, getFullAXTree, resolveSelector, close };
 }

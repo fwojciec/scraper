@@ -1,10 +1,10 @@
-// Adapter: DOM Accessibility API helpers for ARIA tree snapshots.
+// Adapter: CDP Accessibility tree → ARIA snapshot.
 export {
   type AriaNode,
-  buildAriaTree,
-  type DomElement,
-  type DomNode,
+  type AXNode,
+  transformAXTree,
+  type TransformResult,
   type TreeOptions,
 } from "./tree.ts";
 export { renderYaml } from "./render.ts";
-export { createSnapshotService } from "./snapshot.ts";
+export { createSnapshotService, type SnapshotDeps } from "./snapshot.ts";

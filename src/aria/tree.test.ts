@@ -1,57 +1,123 @@
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
-import { DOMParser } from "@b-fuze/deno-dom";
-import { buildAriaTree, type DomElement } from "./tree.ts";
+import { type AXNode, transformAXTree, type TransformResult } from "./tree.ts";
 import { renderYaml } from "./render.ts";
 
+/** Helper: transform AXNodes and render to YAML. */
 function snapshot(
-  html: string,
-  options?: { maxDepth?: number; maxNodes?: number; selector?: string },
+  axNodes: AXNode[],
+  options?: { maxDepth?: number; maxNodes?: number },
 ): string {
-  const doc = new DOMParser().parseFromString(
-    `<html><body>${html}</body></html>`,
-    "text/html",
-  );
-  const root = options?.selector
-    ? doc.querySelector(options.selector) as unknown as DomElement
-    : doc.body as unknown as DomElement;
-  if (!root) return "";
-  const tree = buildAriaTree(root, options);
-  return renderYaml(tree);
+  const { nodes } = transformAXTree(axNodes, options);
+  return renderYaml(nodes);
 }
 
-Deno.test("link with href gets role and ref", () => {
-  const yaml = snapshot(`<a href="/about">About Us</a>`);
+/** Helper: transform AXNodes and return full result (nodes + refs). */
+function transform(
+  axNodes: AXNode[],
+  options?: { maxDepth?: number; maxNodes?: number },
+  rootNodeId?: string,
+): TransformResult {
+  return transformAXTree(axNodes, options, rootNodeId);
+}
+
+/** Helper to build a minimal AXNode. */
+function ax(overrides: Partial<AXNode> & { nodeId: string }): AXNode {
+  return {
+    ignored: false,
+    ...overrides,
+  };
+}
+
+// --- Basic role mapping ---
+
+Deno.test("link gets role and ref", () => {
+  const nodes: AXNode[] = [
+    ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
+    ax({
+      nodeId: "2",
+      role: { type: "role", value: "link" },
+      name: { type: "contents", value: "About Us" },
+      backendDOMNodeId: 42,
+    }),
+  ];
+  const yaml = snapshot(nodes);
   assertStringIncludes(yaml, `link "About Us" [ref=e1]`);
 });
 
-Deno.test("anchor without href has no role", () => {
-  const yaml = snapshot(`<a>Not a link</a>`);
-  assert(!yaml.includes("- link"));
-});
-
 Deno.test("button gets role and ref", () => {
-  const yaml = snapshot(`<button>Click me</button>`);
+  const nodes: AXNode[] = [
+    ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
+    ax({
+      nodeId: "2",
+      role: { type: "role", value: "button" },
+      name: { type: "contents", value: "Click me" },
+      backendDOMNodeId: 10,
+    }),
+  ];
+  const yaml = snapshot(nodes);
   assertStringIncludes(yaml, `button "Click me" [ref=e1]`);
 });
 
-Deno.test("heading level preserved", () => {
-  const yaml = snapshot(`<h2>Chapter One</h2>`);
+Deno.test("heading with level preserved", () => {
+  const nodes: AXNode[] = [
+    ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
+    ax({
+      nodeId: "2",
+      role: { type: "role", value: "heading" },
+      name: { type: "contents", value: "Chapter One" },
+      properties: [{ name: "level", value: { type: "integer", value: 2 } }],
+    }),
+  ];
+  const yaml = snapshot(nodes);
   assertStringIncludes(yaml, `heading "Chapter One" [level=2]`);
 });
 
-Deno.test("all heading levels", () => {
+Deno.test("all heading levels 1-6", () => {
   for (let i = 1; i <= 6; i++) {
-    const yaml = snapshot(`<h${i}>Title</h${i}>`);
-    assertStringIncludes(yaml, `[level=${i}]`);
+    const nodes: AXNode[] = [
+      ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
+      ax({
+        nodeId: "2",
+        role: { type: "role", value: "heading" },
+        name: { type: "contents", value: "Title" },
+        properties: [{ name: "level", value: { type: "integer", value: i } }],
+      }),
+    ];
+    const yaml = snapshot(nodes);
+    assertStringIncludes(yaml, `[level=${i}`);
   }
 });
 
+// --- Table structure ---
+
 Deno.test("table structure maps to ARIA roles", () => {
-  const html = `<table>
-    <tr><th>Rank</th><th>Title</th></tr>
-    <tr><td>1</td><td>Some Book</td></tr>
-  </table>`;
-  const yaml = snapshot(html);
+  const nodes: AXNode[] = [
+    ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
+    ax({ nodeId: "2", role: { type: "role", value: "table" }, childIds: ["3", "4"] }),
+    ax({ nodeId: "3", role: { type: "role", value: "row" }, childIds: ["5", "6"] }),
+    ax({
+      nodeId: "5",
+      role: { type: "role", value: "columnheader" },
+      name: { type: "contents", value: "Rank" },
+    }),
+    ax({
+      nodeId: "6",
+      role: { type: "role", value: "columnheader" },
+      name: { type: "contents", value: "Title" },
+    }),
+    ax({ nodeId: "4", role: { type: "role", value: "row" }, childIds: ["7", "8"] }),
+    ax({
+      nodeId: "7",
+      role: { type: "role", value: "cell" },
+      name: { type: "contents", value: "1" },
+    }),
+    ax({
+      nodeId: "8",
+      role: { type: "role", value: "cell" },
+      name: { type: "contents", value: "Some Book" },
+    }),
+  ];
+  const yaml = snapshot(nodes);
   assertStringIncludes(yaml, "table:");
   assertStringIncludes(yaml, "row:");
   assertStringIncludes(yaml, `columnheader "Rank"`);
@@ -60,275 +126,663 @@ Deno.test("table structure maps to ARIA roles", () => {
   assertStringIncludes(yaml, `cell "Some Book"`);
 });
 
-Deno.test("img with alt gets role and name", () => {
-  const yaml = snapshot(`<img alt="Logo" src="logo.png">`);
+// --- Image ---
+
+Deno.test("image with name gets img role", () => {
+  const nodes: AXNode[] = [
+    ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
+    ax({
+      nodeId: "2",
+      role: { type: "role", value: "image" },
+      name: { type: "attribute", value: "Logo" },
+    }),
+  ];
+  const yaml = snapshot(nodes);
   assertStringIncludes(yaml, `img "Logo"`);
 });
 
-Deno.test("hidden elements excluded - display:none", () => {
-  const yaml = snapshot(`<div>Visible</div><div style="display:none">Hidden</div>`);
+// --- Ignored and hidden ---
+
+Deno.test("ignored nodes excluded", () => {
+  const nodes: AXNode[] = [
+    ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2", "3"] }),
+    ax({
+      nodeId: "2",
+      role: { type: "role", value: "paragraph" },
+      name: { type: "contents", value: "Visible" },
+    }),
+    ax({
+      nodeId: "3",
+      ignored: true,
+      role: { type: "role", value: "paragraph" },
+      name: { type: "contents", value: "Hidden" },
+    }),
+  ];
+  const yaml = snapshot(nodes);
   assertStringIncludes(yaml, "Visible");
   assert(!yaml.includes("Hidden"));
 });
 
-Deno.test("hidden elements excluded - aria-hidden", () => {
-  const yaml = snapshot(`<p>Shown</p><p aria-hidden="true">Secret</p>`);
-  assertStringIncludes(yaml, "Shown");
-  assert(!yaml.includes("Secret"));
-});
+// --- Generic/transparent elements ---
 
-Deno.test("hidden elements excluded - hidden attribute", () => {
-  const yaml = snapshot(`<p>Shown</p><p hidden>Secret</p>`);
-  assertStringIncludes(yaml, "Shown");
-  assert(!yaml.includes("Secret"));
-});
-
-Deno.test("generic div wrappers collapsed", () => {
-  const yaml = snapshot(`<div><div><a href="/">Home</a></div></div>`);
+Deno.test("generic elements are transparent", () => {
+  const nodes: AXNode[] = [
+    ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
+    ax({ nodeId: "2", role: { type: "role", value: "generic" }, childIds: ["3"] }),
+    ax({
+      nodeId: "3",
+      role: { type: "role", value: "link" },
+      name: { type: "contents", value: "Home" },
+      backendDOMNodeId: 5,
+    }),
+  ];
+  const yaml = snapshot(nodes);
   assert(!yaml.includes("generic"));
   assertStringIncludes(yaml, `link "Home"`);
 });
 
-Deno.test("generic span wrappers collapsed", () => {
-  const yaml = snapshot(`<span><button>Go</button></span>`);
-  assert(!yaml.includes("generic"));
-  assertStringIncludes(yaml, `button "Go"`);
+Deno.test("none role is transparent", () => {
+  const nodes: AXNode[] = [
+    ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
+    ax({ nodeId: "2", role: { type: "role", value: "none" }, childIds: ["3"] }),
+    ax({
+      nodeId: "3",
+      role: { type: "role", value: "link" },
+      name: { type: "contents", value: "Home" },
+      backendDOMNodeId: 5,
+    }),
+  ];
+  const yaml = snapshot(nodes);
+  assert(!yaml.includes("none"));
+  assertStringIncludes(yaml, `link "Home"`);
 });
 
-Deno.test("aria-label overrides text content", () => {
-  const yaml = snapshot(`<button aria-label="Close dialog">X</button>`);
+Deno.test("presentation role is transparent", () => {
+  const nodes: AXNode[] = [
+    ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
+    ax({ nodeId: "2", role: { type: "role", value: "presentation" }, childIds: ["3"] }),
+    ax({
+      nodeId: "3",
+      role: { type: "role", value: "link" },
+      name: { type: "contents", value: "Home" },
+      backendDOMNodeId: 5,
+    }),
+  ];
+  const yaml = snapshot(nodes);
+  assert(!yaml.includes("presentation"));
+  assertStringIncludes(yaml, `link "Home"`);
+});
+
+// --- Name handling ---
+
+Deno.test("explicit name (aria-label) overrides text content", () => {
+  const nodes: AXNode[] = [
+    ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
+    ax({
+      nodeId: "2",
+      role: { type: "role", value: "button" },
+      name: { type: "attribute", value: "Close dialog" },
+      backendDOMNodeId: 10,
+      childIds: ["3"],
+    }),
+    ax({
+      nodeId: "3",
+      role: { type: "role", value: "StaticText" },
+      name: { type: "contents", value: "X" },
+    }),
+  ];
+  const yaml = snapshot(nodes);
   assertStringIncludes(yaml, `button "Close dialog"`);
   assert(!yaml.includes(`"X"`));
 });
 
-Deno.test("nav maps to navigation", () => {
-  const yaml = snapshot(`<nav><a href="/">Home</a></nav>`);
-  assertStringIncludes(yaml, "navigation:");
+Deno.test("text children absorbed into parent name", () => {
+  const nodes: AXNode[] = [
+    ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
+    ax({
+      nodeId: "2",
+      role: { type: "role", value: "paragraph" },
+      name: { type: "contents", value: "Hello world" },
+      childIds: ["3"],
+    }),
+    ax({
+      nodeId: "3",
+      role: { type: "role", value: "StaticText" },
+      name: { type: "contents", value: "Hello world" },
+    }),
+  ];
+  const yaml = snapshot(nodes);
+  assertStringIncludes(yaml, `paragraph "Hello world"`);
+  assert(!yaml.includes("text"));
 });
 
-Deno.test("landmark roles", () => {
-  const yaml = snapshot(`
-    <header><a href="/">Logo</a></header>
-    <main><p>Content</p></main>
-    <footer><p>Copyright</p></footer>
-  `);
+Deno.test("semantic children shown when mixed with text", () => {
+  const nodes: AXNode[] = [
+    ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
+    ax({
+      nodeId: "2",
+      role: { type: "role", value: "paragraph" },
+      name: { type: "contents", value: "Click here now" },
+      childIds: ["3", "4", "5"],
+    }),
+    ax({
+      nodeId: "3",
+      role: { type: "role", value: "StaticText" },
+      name: { type: "contents", value: "Click " },
+    }),
+    ax({
+      nodeId: "4",
+      role: { type: "role", value: "link" },
+      name: { type: "contents", value: "here" },
+      backendDOMNodeId: 20,
+    }),
+    ax({
+      nodeId: "5",
+      role: { type: "role", value: "StaticText" },
+      name: { type: "contents", value: " now" },
+    }),
+  ];
+  const yaml = snapshot(nodes);
+  assertStringIncludes(yaml, "paragraph:");
+  assertStringIncludes(yaml, `text "Click "`);
+  assertStringIncludes(yaml, `link "here"`);
+  assertStringIncludes(yaml, `text " now"`);
+});
+
+Deno.test("explicit name with semantic children keeps both", () => {
+  // <nav aria-label="Main"><a href="/">Home</a></nav>
+  const nodes: AXNode[] = [
+    ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
+    ax({
+      nodeId: "2",
+      role: { type: "role", value: "navigation" },
+      name: { type: "attribute", value: "Main" },
+      childIds: ["3"],
+    }),
+    ax({
+      nodeId: "3",
+      role: { type: "role", value: "link" },
+      name: { type: "contents", value: "Home" },
+      backendDOMNodeId: 5,
+    }),
+  ];
+  const yaml = snapshot(nodes);
+  assertStringIncludes(yaml, `navigation "Main":`);
+  assertStringIncludes(yaml, `link "Home"`);
+});
+
+// --- Landmark roles ---
+
+Deno.test("landmark roles preserved", () => {
+  const nodes: AXNode[] = [
+    ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2", "3", "4"] }),
+    ax({
+      nodeId: "2",
+      role: { type: "role", value: "banner" },
+      childIds: ["5"],
+    }),
+    ax({
+      nodeId: "5",
+      role: { type: "role", value: "link" },
+      name: { type: "contents", value: "Logo" },
+      backendDOMNodeId: 10,
+    }),
+    ax({
+      nodeId: "3",
+      role: { type: "role", value: "main" },
+      childIds: ["6"],
+    }),
+    ax({
+      nodeId: "6",
+      role: { type: "role", value: "paragraph" },
+      name: { type: "contents", value: "Content" },
+    }),
+    ax({
+      nodeId: "4",
+      role: { type: "role", value: "contentinfo" },
+      childIds: ["7"],
+    }),
+    ax({
+      nodeId: "7",
+      role: { type: "role", value: "paragraph" },
+      name: { type: "contents", value: "Copyright" },
+    }),
+  ];
+  const yaml = snapshot(nodes);
   assertStringIncludes(yaml, "banner:");
   assertStringIncludes(yaml, "main:");
   assertStringIncludes(yaml, "contentinfo:");
 });
 
+// --- Lists ---
+
 Deno.test("list and listitem", () => {
-  const yaml = snapshot(`<ul><li>One</li><li>Two</li></ul>`);
+  const nodes: AXNode[] = [
+    ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
+    ax({ nodeId: "2", role: { type: "role", value: "list" }, childIds: ["3", "4"] }),
+    ax({
+      nodeId: "3",
+      role: { type: "role", value: "listitem" },
+      name: { type: "contents", value: "One" },
+    }),
+    ax({
+      nodeId: "4",
+      role: { type: "role", value: "listitem" },
+      name: { type: "contents", value: "Two" },
+    }),
+  ];
+  const yaml = snapshot(nodes);
   assertStringIncludes(yaml, "list:");
   assertStringIncludes(yaml, `listitem "One"`);
   assertStringIncludes(yaml, `listitem "Two"`);
 });
 
-Deno.test("input gets textbox role and ref", () => {
-  const yaml = snapshot(`<input type="text">`);
+// --- Input types ---
+
+Deno.test("textbox gets ref", () => {
+  const nodes: AXNode[] = [
+    ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
+    ax({
+      nodeId: "2",
+      role: { type: "role", value: "textbox" },
+      backendDOMNodeId: 15,
+    }),
+  ];
+  const yaml = snapshot(nodes);
   assertStringIncludes(yaml, `textbox [ref=e1]`);
 });
 
-Deno.test("select gets combobox role and ref", () => {
-  const yaml = snapshot(`<select><option>A</option></select>`);
+Deno.test("combobox gets ref", () => {
+  const nodes: AXNode[] = [
+    ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
+    ax({
+      nodeId: "2",
+      role: { type: "role", value: "combobox" },
+      backendDOMNodeId: 20,
+    }),
+  ];
+  const yaml = snapshot(nodes);
   assertStringIncludes(yaml, `combobox`);
   assertStringIncludes(yaml, `ref=e1`);
 });
 
-Deno.test("textarea gets textbox role and ref", () => {
-  const yaml = snapshot(`<textarea></textarea>`);
-  assertStringIncludes(yaml, `textbox [ref=e1]`);
+Deno.test("checkbox gets ref", () => {
+  const nodes: AXNode[] = [
+    ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
+    ax({
+      nodeId: "2",
+      role: { type: "role", value: "checkbox" },
+      backendDOMNodeId: 25,
+    }),
+  ];
+  const yaml = snapshot(nodes);
+  assertStringIncludes(yaml, `checkbox [ref=e1]`);
 });
 
+Deno.test("radio gets ref", () => {
+  const nodes: AXNode[] = [
+    ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
+    ax({
+      nodeId: "2",
+      role: { type: "role", value: "radio" },
+      backendDOMNodeId: 30,
+    }),
+  ];
+  const yaml = snapshot(nodes);
+  assertStringIncludes(yaml, `radio [ref=e1]`);
+});
+
+// --- Refs ---
+
 Deno.test("refs increment sequentially", () => {
-  const yaml = snapshot(`
-    <a href="/a">A</a>
-    <a href="/b">B</a>
-    <button>C</button>
-  `);
+  const nodes: AXNode[] = [
+    ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2", "3", "4"] }),
+    ax({
+      nodeId: "2",
+      role: { type: "role", value: "link" },
+      name: { type: "contents", value: "A" },
+      backendDOMNodeId: 10,
+    }),
+    ax({
+      nodeId: "3",
+      role: { type: "role", value: "link" },
+      name: { type: "contents", value: "B" },
+      backendDOMNodeId: 20,
+    }),
+    ax({
+      nodeId: "4",
+      role: { type: "role", value: "button" },
+      name: { type: "contents", value: "C" },
+      backendDOMNodeId: 30,
+    }),
+  ];
+  const yaml = snapshot(nodes);
   assertStringIncludes(yaml, `[ref=e1]`);
   assertStringIncludes(yaml, `[ref=e2]`);
   assertStringIncludes(yaml, `[ref=e3]`);
 });
 
-Deno.test("section without label is transparent", () => {
-  const yaml = snapshot(`<section><p>Hello</p></section>`);
-  assert(!yaml.includes("region"));
-  assertStringIncludes(yaml, `paragraph "Hello"`);
+Deno.test("refs map to backendDOMNodeIds", () => {
+  const nodes: AXNode[] = [
+    ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2", "3"] }),
+    ax({
+      nodeId: "2",
+      role: { type: "role", value: "link" },
+      name: { type: "contents", value: "A" },
+      backendDOMNodeId: 42,
+    }),
+    ax({
+      nodeId: "3",
+      role: { type: "role", value: "button" },
+      name: { type: "contents", value: "B" },
+      backendDOMNodeId: 87,
+    }),
+  ];
+  const result = transform(nodes);
+  assertEquals(result.refs, { e1: 42, e2: 87 });
 });
 
-Deno.test("section with aria-label becomes region", () => {
-  const yaml = snapshot(`<section aria-label="Sidebar"><p>Hello</p></section>`);
-  assertStringIncludes(yaml, `region "Sidebar":`);
-});
-
-Deno.test("explicit role attribute overrides implicit", () => {
-  const yaml = snapshot(`<div role="alert">Warning!</div>`);
-  assertStringIncludes(yaml, `alert "Warning!"`);
-});
+// --- Depth and node limits ---
 
 Deno.test("maxDepth limits tree depth", () => {
-  const yaml = snapshot(
-    `<nav><ul><li><a href="/">Deep</a></li></ul></nav>`,
-    { maxDepth: 2 },
-  );
+  const nodes: AXNode[] = [
+    ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
+    ax({ nodeId: "2", role: { type: "role", value: "navigation" }, childIds: ["3"] }),
+    ax({ nodeId: "3", role: { type: "role", value: "list" }, childIds: ["4"] }),
+    ax({ nodeId: "4", role: { type: "role", value: "listitem" }, childIds: ["5"] }),
+    ax({
+      nodeId: "5",
+      role: { type: "role", value: "link" },
+      name: { type: "contents", value: "Deep" },
+      backendDOMNodeId: 10,
+    }),
+  ];
+  const yaml = snapshot(nodes, { maxDepth: 2 });
   assertStringIncludes(yaml, "navigation:");
   assertStringIncludes(yaml, "list:");
-  // At maxDepth=2 the link child is omitted; listitem appears without children
   assert(!yaml.includes("link"));
 });
 
 Deno.test("maxNodes limits total nodes", () => {
-  const yaml = snapshot(
-    `<p>One</p><p>Two</p><p>Three</p><p>Four</p><p>Five</p>`,
-    { maxNodes: 3 },
-  );
+  const nodes: AXNode[] = [
+    ax({
+      nodeId: "1",
+      role: { type: "role", value: "RootWebArea" },
+      childIds: ["2", "3", "4", "5", "6"],
+    }),
+    ax({
+      nodeId: "2",
+      role: { type: "role", value: "paragraph" },
+      name: { type: "contents", value: "One" },
+    }),
+    ax({
+      nodeId: "3",
+      role: { type: "role", value: "paragraph" },
+      name: { type: "contents", value: "Two" },
+    }),
+    ax({
+      nodeId: "4",
+      role: { type: "role", value: "paragraph" },
+      name: { type: "contents", value: "Three" },
+    }),
+    ax({
+      nodeId: "5",
+      role: { type: "role", value: "paragraph" },
+      name: { type: "contents", value: "Four" },
+    }),
+    ax({
+      nodeId: "6",
+      role: { type: "role", value: "paragraph" },
+      name: { type: "contents", value: "Five" },
+    }),
+  ];
+  const yaml = snapshot(nodes, { maxNodes: 3 });
   const matches = yaml.match(/paragraph/g);
   assertEquals(matches?.length, 3);
 });
 
-Deno.test("selector scopes to subtree", () => {
-  const yaml = snapshot(
-    `<div id="outside"><p>Skip</p></div><div id="target"><p>Include</p></div>`,
-    { selector: "#target" },
-  );
+// --- Root node selection ---
+
+Deno.test("rootNodeId scopes transform to subtree", () => {
+  const nodes: AXNode[] = [
+    ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2", "3"] }),
+    ax({
+      nodeId: "2",
+      role: { type: "role", value: "paragraph" },
+      name: { type: "contents", value: "Skip" },
+    }),
+    ax({ nodeId: "3", role: { type: "role", value: "main" }, childIds: ["4"] }),
+    ax({
+      nodeId: "4",
+      role: { type: "role", value: "paragraph" },
+      name: { type: "contents", value: "Include" },
+    }),
+  ];
+  const result = transform(nodes, undefined, "3");
+  const yaml = renderYaml(result.nodes);
   assert(!yaml.includes("Skip"));
   assertStringIncludes(yaml, `paragraph "Include"`);
 });
 
-Deno.test("selector preserves semantic root element", () => {
-  const yaml = snapshot(
-    `<div><nav id="main-nav"><a href="/">Home</a></nav></div>`,
-    { selector: "#main-nav" },
-  );
-  assertStringIncludes(yaml, "navigation:");
-  assertStringIncludes(yaml, `link "Home"`);
+// --- StaticText / InlineTextBox ---
+
+Deno.test("StaticText becomes text pseudo-node", () => {
+  const nodes: AXNode[] = [
+    ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
+    ax({ nodeId: "2", role: { type: "role", value: "paragraph" }, childIds: ["3", "4"] }),
+    ax({
+      nodeId: "3",
+      role: { type: "role", value: "StaticText" },
+      name: { type: "contents", value: "Hello " },
+    }),
+    ax({
+      nodeId: "4",
+      role: { type: "role", value: "link" },
+      name: { type: "contents", value: "world" },
+      backendDOMNodeId: 5,
+    }),
+  ];
+  const yaml = snapshot(nodes);
+  assertStringIncludes(yaml, `text "Hello "`);
+  assertStringIncludes(yaml, `link "world"`);
 });
 
-Deno.test("empty document produces empty string", () => {
-  const yaml = snapshot(``);
-  assertEquals(yaml, "");
+Deno.test("InlineTextBox is skipped", () => {
+  const nodes: AXNode[] = [
+    ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
+    ax({
+      nodeId: "2",
+      role: { type: "role", value: "StaticText" },
+      name: { type: "contents", value: "Hello" },
+      childIds: ["3"],
+    }),
+    ax({
+      nodeId: "3",
+      role: { type: "role", value: "InlineTextBox" },
+      name: { type: "contents", value: "Hello" },
+    }),
+  ];
+  // StaticText with InlineTextBox child — the InlineTextBox should be ignored
+  const result = transform(nodes);
+  assertEquals(result.nodes.length, 1);
+  assertEquals(result.nodes[0].role, "text");
+  assertEquals(result.nodes[0].name, "Hello");
 });
 
-Deno.test("visibility:hidden excluded", () => {
-  const yaml = snapshot(
-    `<p>Shown</p><p style="visibility: hidden">Ghost</p>`,
-  );
-  assertStringIncludes(yaml, "Shown");
-  assert(!yaml.includes("Ghost"));
+// --- Explicit roles ---
+
+Deno.test("explicit alert role preserved", () => {
+  const nodes: AXNode[] = [
+    ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
+    ax({
+      nodeId: "2",
+      role: { type: "role", value: "alert" },
+      name: { type: "contents", value: "Warning!" },
+    }),
+  ];
+  const yaml = snapshot(nodes);
+  assertStringIncludes(yaml, `alert "Warning!"`);
 });
 
-Deno.test("hidden input type excluded", () => {
-  const yaml = snapshot(`<input type="hidden" value="secret">`);
-  assertEquals(yaml, "");
+Deno.test("region with name", () => {
+  const nodes: AXNode[] = [
+    ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
+    ax({
+      nodeId: "2",
+      role: { type: "role", value: "region" },
+      name: { type: "attribute", value: "Sidebar" },
+      childIds: ["3"],
+    }),
+    ax({
+      nodeId: "3",
+      role: { type: "role", value: "paragraph" },
+      name: { type: "contents", value: "Hello" },
+    }),
+  ];
+  const yaml = snapshot(nodes);
+  assertStringIncludes(yaml, `region "Sidebar":`);
 });
 
-Deno.test("cell with link child", () => {
-  const yaml = snapshot(`<table><tr><td><a href="/book">Title</a></td></tr></table>`);
+Deno.test("form with name", () => {
+  const nodes: AXNode[] = [
+    ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
+    ax({
+      nodeId: "2",
+      role: { type: "role", value: "form" },
+      name: { type: "attribute", value: "Login" },
+      childIds: ["3"],
+    }),
+    ax({
+      nodeId: "3",
+      role: { type: "role", value: "textbox" },
+      backendDOMNodeId: 15,
+    }),
+  ];
+  const yaml = snapshot(nodes);
+  assertStringIncludes(yaml, `form "Login":`);
+});
+
+// --- Rowgroup ---
+
+Deno.test("rowgroup roles preserved", () => {
+  const nodes: AXNode[] = [
+    ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
+    ax({ nodeId: "2", role: { type: "role", value: "table" }, childIds: ["3", "4", "5"] }),
+    ax({ nodeId: "3", role: { type: "role", value: "rowgroup" }, childIds: ["6"] }),
+    ax({ nodeId: "6", role: { type: "role", value: "row" }, childIds: ["9"] }),
+    ax({
+      nodeId: "9",
+      role: { type: "role", value: "columnheader" },
+      name: { type: "contents", value: "Header" },
+    }),
+    ax({ nodeId: "4", role: { type: "role", value: "rowgroup" }, childIds: ["7"] }),
+    ax({ nodeId: "7", role: { type: "role", value: "row" }, childIds: ["10"] }),
+    ax({
+      nodeId: "10",
+      role: { type: "role", value: "cell" },
+      name: { type: "contents", value: "Body" },
+    }),
+    ax({ nodeId: "5", role: { type: "role", value: "rowgroup" }, childIds: ["8"] }),
+    ax({ nodeId: "8", role: { type: "role", value: "row" }, childIds: ["11"] }),
+    ax({
+      nodeId: "11",
+      role: { type: "role", value: "cell" },
+      name: { type: "contents", value: "Footer" },
+    }),
+  ];
+  const yaml = snapshot(nodes);
+  assertEquals(yaml.match(/rowgroup:/g)?.length, 3);
+});
+
+// --- Empty tree ---
+
+Deno.test("empty AXNode array produces empty result", () => {
+  const result = transform([]);
+  assertEquals(result.nodes, []);
+  assertEquals(result.refs, {});
+});
+
+// --- Cell with link child ---
+
+Deno.test("cell with link child preserves link", () => {
+  const nodes: AXNode[] = [
+    ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
+    ax({ nodeId: "2", role: { type: "role", value: "table" }, childIds: ["3"] }),
+    ax({ nodeId: "3", role: { type: "role", value: "row" }, childIds: ["4"] }),
+    ax({
+      nodeId: "4",
+      role: { type: "role", value: "cell" },
+      name: { type: "contents", value: "Title" },
+      childIds: ["5"],
+    }),
+    ax({
+      nodeId: "5",
+      role: { type: "role", value: "link" },
+      name: { type: "contents", value: "Title" },
+      backendDOMNodeId: 50,
+    }),
+  ];
+  const yaml = snapshot(nodes);
   assertStringIncludes(yaml, "cell:");
   assertStringIncludes(yaml, `link "Title"`);
 });
 
-Deno.test("checkbox input gets checkbox role", () => {
-  const yaml = snapshot(`<input type="checkbox">`);
-  assertStringIncludes(yaml, `checkbox [ref=e1]`);
-});
+// --- Article / complementary ---
 
-Deno.test("radio input gets radio role", () => {
-  const yaml = snapshot(`<input type="radio">`);
-  assertStringIncludes(yaml, `radio [ref=e1]`);
-});
-
-Deno.test("submit input gets button role and value as name", () => {
-  const yaml = snapshot(`<input type="submit" value="Send">`);
-  assertStringIncludes(yaml, `button "Send" [ref=e1]`);
-});
-
-Deno.test("article gets article role", () => {
-  const yaml = snapshot(`<article><p>Content</p></article>`);
+Deno.test("article role preserved", () => {
+  const nodes: AXNode[] = [
+    ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
+    ax({
+      nodeId: "2",
+      role: { type: "role", value: "article" },
+      childIds: ["3"],
+    }),
+    ax({
+      nodeId: "3",
+      role: { type: "role", value: "paragraph" },
+      name: { type: "contents", value: "Content" },
+    }),
+  ];
+  const yaml = snapshot(nodes);
   assertStringIncludes(yaml, "article:");
 });
 
-Deno.test("aside gets complementary role", () => {
-  const yaml = snapshot(`<aside><p>Sidebar</p></aside>`);
+Deno.test("complementary role preserved", () => {
+  const nodes: AXNode[] = [
+    ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
+    ax({
+      nodeId: "2",
+      role: { type: "role", value: "complementary" },
+      childIds: ["3"],
+    }),
+    ax({
+      nodeId: "3",
+      role: { type: "role", value: "paragraph" },
+      name: { type: "contents", value: "Sidebar" },
+    }),
+  ];
+  const yaml = snapshot(nodes);
   assertStringIncludes(yaml, "complementary:");
 });
 
-Deno.test("ordered list gets list role", () => {
-  const yaml = snapshot(`<ol><li>First</li></ol>`);
-  assertStringIncludes(yaml, "list:");
-  assertStringIncludes(yaml, `listitem "First"`);
-});
+// --- Ignored nodes with visible children ---
 
-Deno.test("form with aria-label gets form role", () => {
-  const yaml = snapshot(`<form aria-label="Login"><input type="text"></form>`);
-  assertStringIncludes(yaml, `form "Login":`);
-});
-
-Deno.test("form without label is transparent", () => {
-  const yaml = snapshot(`<form><input type="text"></form>`);
-  assert(!yaml.includes("form"));
-  assertStringIncludes(yaml, "textbox");
-});
-
-Deno.test("explicit role on span prevents text leaking into parent name", () => {
-  const yaml = snapshot(`<p>Hello <span role="button">Click</span></p>`);
-  assert(!yaml.includes(`paragraph "Hello Click"`));
-  assertStringIncludes(yaml, `button "Click"`);
-});
-
-Deno.test("role=presentation is transparent", () => {
-  const yaml = snapshot(`<div role="presentation"><a href="/">Home</a></div>`);
-  assert(!yaml.includes("presentation"));
-  assertStringIncludes(yaml, `link "Home"`);
-});
-
-Deno.test("role=none is transparent", () => {
-  const yaml = snapshot(`<nav role="none"><a href="/">Home</a></nav>`);
-  assert(!yaml.includes("navigation"));
-  assert(!yaml.includes("none"));
-  assertStringIncludes(yaml, `link "Home"`);
-});
-
-Deno.test("aria-hidden=True (uppercase) is excluded", () => {
-  const yaml = snapshot(`<p>Shown</p><p aria-hidden="True">Hidden</p>`);
-  assertStringIncludes(yaml, "Shown");
-  assert(!yaml.includes("Hidden"));
-});
-
-Deno.test("thead/tbody/tfoot get rowgroup role", () => {
-  const html = `<table>
-    <thead><tr><th>Header</th></tr></thead>
-    <tbody><tr><td>Body</td></tr></tbody>
-    <tfoot><tr><td>Footer</td></tr></tfoot>
-  </table>`;
-  const yaml = snapshot(html);
-  assertEquals(yaml.match(/rowgroup:/g)?.length, 3);
-});
-
-Deno.test("header inside article is generic, not banner", () => {
-  const yaml = snapshot(`<article><header><h1>Title</h1></header></article>`);
-  assert(!yaml.includes("banner"));
-  assertStringIncludes(yaml, "article:");
-  assertStringIncludes(yaml, `heading "Title"`);
-});
-
-Deno.test("footer inside section is generic, not contentinfo", () => {
-  const yaml = snapshot(
-    `<section aria-label="Main"><footer><p>Copyright</p></footer></section>`,
-  );
-  assert(!yaml.includes("contentinfo"));
-  assertStringIncludes(yaml, `region "Main":`);
-  assertStringIncludes(yaml, `paragraph "Copyright"`);
-});
-
-Deno.test("top-level header/footer keep landmark roles", () => {
-  const yaml = snapshot(`<header><p>Logo</p></header><footer><p>Legal</p></footer>`);
-  assertStringIncludes(yaml, "banner:");
-  assertStringIncludes(yaml, "contentinfo:");
-});
-
-Deno.test("text across inline elements preserves spacing", () => {
-  const yaml = snapshot(`<p>Click <strong>here</strong> now</p>`);
-  assertStringIncludes(yaml, `paragraph "Click here now"`);
+Deno.test("ignored node's children still processed", () => {
+  const nodes: AXNode[] = [
+    ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
+    ax({
+      nodeId: "2",
+      ignored: true,
+      role: { type: "role", value: "generic" },
+      childIds: ["3"],
+    }),
+    ax({
+      nodeId: "3",
+      role: { type: "role", value: "link" },
+      name: { type: "contents", value: "Visible" },
+      backendDOMNodeId: 5,
+    }),
+  ];
+  const yaml = snapshot(nodes);
+  assertStringIncludes(yaml, `link "Visible"`);
 });

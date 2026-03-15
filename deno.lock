@@ -1,7 +1,6 @@
 {
   "version": "5",
   "specifiers": {
-    "jsr:@b-fuze/deno-dom@0.1": "0.1.56",
     "jsr:@simple-cdp/simple-cdp@^1.8.0": "1.8.6",
     "jsr:@std/assert@1": "1.0.19",
     "jsr:@std/internal@^1.0.12": "1.0.12",
@@ -9,9 +8,6 @@
     "jsr:@std/path@1": "1.1.4"
   },
   "jsr": {
-    "@b-fuze/deno-dom@0.1.56": {
-      "integrity": "8030e2dc1d8750f1682b53462ab893d9c3470f2287feecbe22f44a88c54ab148"
-    },
     "@simple-cdp/simple-cdp@1.8.6": {
       "integrity": "beabfb0dd8cb8c964f09249b94ef23334d65a583f622f43d6302222b25ee3af8"
     },
@@ -33,7 +29,6 @@
   },
   "workspace": {
     "dependencies": [
-      "jsr:@b-fuze/deno-dom@0.1",
       "jsr:@simple-cdp/simple-cdp@^1.8.0",
       "jsr:@std/assert@1",
       "jsr:@std/path@1"

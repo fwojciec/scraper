@@ -1,30 +1,36 @@
-/** SnapshotService: evaluates page HTML via callback, parses with deno-dom, builds ARIA tree. */
+/** SnapshotService: uses CDP Accessibility tree to build ARIA snapshots. */
 
-import { DOMParser } from "@b-fuze/deno-dom";
 import type { SnapshotService } from "../domain/browser.ts";
-import { buildAriaTree, type DomElement } from "./tree.ts";
+import { type AXNode, transformAXTree } from "./tree.ts";
 import { renderYaml } from "./render.ts";
 
-/** Create a SnapshotService that fetches HTML via evaluateInPage and builds an ARIA tree. */
-export function createSnapshotService(): SnapshotService {
+/** Dependencies for the snapshot service, provided by the CDP adapter. */
+export interface SnapshotDeps {
+  getFullAXTree(): Promise<AXNode[]>;
+  resolveSelector(selector: string): Promise<number>;
+}
+
+/** Create a SnapshotService that transforms CDP Accessibility tree data. */
+export function createSnapshotService(deps: SnapshotDeps): SnapshotService {
   return {
-    async snapshot(options, evaluateInPage) {
-      const selector = options.selector ?? "body";
-      const expression = `document.querySelector(${JSON.stringify(selector)})?.outerHTML ?? ""`;
-      const html = await evaluateInPage(expression) as string;
+    async snapshot(options) {
+      const axNodes = await deps.getFullAXTree();
 
-      if (!html) return { yaml: "" };
+      let rootNodeId: string | undefined;
 
-      const doc = new DOMParser().parseFromString(html, "text/html");
-      if (!doc) return { yaml: "" };
+      if (options.selector) {
+        const backendNodeId = await deps.resolveSelector(options.selector);
+        const match = axNodes.find((n) => n.backendDOMNodeId === backendNodeId);
+        if (!match) return { yaml: "", refs: {} };
+        rootNodeId = match.nodeId;
+      }
 
-      const root = doc.body as unknown as DomElement;
-      const nodes = buildAriaTree(root, {
+      const { nodes, refs } = transformAXTree(axNodes, {
         maxDepth: options.maxDepth,
         maxNodes: options.maxNodes,
-      });
+      }, rootNodeId);
 
-      return { yaml: renderYaml(nodes) };
+      return { yaml: renderYaml(nodes), refs };
     },
   };
 }

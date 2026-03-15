@@ -5,7 +5,11 @@ export interface SnapshotOptions {
   selector?: string;
 }
 
+/** Serializable ref map: ref string → backendDOMNodeId. */
+export type RefMap = Record<string, number>;
+
 /** Result of generating an ARIA snapshot. */
 export interface SnapshotResult {
   yaml: string;
+  refs: RefMap;
 }

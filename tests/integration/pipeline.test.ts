@@ -3,7 +3,7 @@
 import { assert, assertEquals } from "@std/assert";
 import { type ChromeProcess, killChrome, launchChrome } from "../../src/cdp/chrome.ts";
 import { type CdpBrowserService, createCdpConnection } from "../../src/cdp/connection.ts";
-import { createSnapshotService } from "../../src/aria/snapshot.ts";
+import { type AXNode, createSnapshotService } from "../../src/aria/mod.ts";
 import type { SnapshotService } from "../../src/domain/browser.ts";
 import { type FixtureServer, startFixtureServer } from "./fixture-server.ts";
 
@@ -39,7 +39,14 @@ async function setup(): Promise<TestContext> {
     partial.chrome = await launchChrome();
     const targetId = await discoverPageTarget(partial.chrome.port);
     partial.browser = await createCdpConnection(partial.chrome.port, targetId);
-    partial.snapshots = createSnapshotService();
+    partial.snapshots = createSnapshotService({
+      async getFullAXTree() {
+        return await partial.browser!.getFullAXTree() as AXNode[];
+      },
+      async resolveSelector(selector: string) {
+        return await partial.browser!.resolveSelector(selector);
+      },
+    });
     return partial as TestContext;
   } catch (err) {
     await teardown(partial);
@@ -59,20 +66,13 @@ async function teardown(ctx: Partial<TestContext>) {
   } catch { /* already closed */ }
 }
 
-function evaluateInPage(browser: CdpBrowserService) {
-  return (expression: string) => browser.evaluate(expression).then((r) => r.result as unknown);
-}
-
 // --- Snapshot integration tests ---
 
 Deno.test("snapshot: bestseller table has expected ARIA structure", async () => {
   const ctx = await setup();
   try {
     await ctx.browser.navigate(ctx.fixtures.url("bestseller-table.html"));
-    const result = await ctx.snapshots.snapshot(
-      {},
-      evaluateInPage(ctx.browser),
-    );
+    const result = await ctx.snapshots.snapshot({});
 
     // Verify heading
     assert(result.yaml.includes("heading"), "should contain heading role");
@@ -93,6 +93,9 @@ Deno.test("snapshot: bestseller table has expected ARIA structure", async () => 
     assert(result.yaml.includes("link"), "should contain link roles");
     assert(result.yaml.includes("ref="), "links should have interactable refs");
 
+    // Verify refs map is populated
+    assert(Object.keys(result.refs).length > 0, "refs should be populated");
+
     // Verify navigation
     assert(result.yaml.includes("navigation"), "should contain nav landmark");
     assert(result.yaml.includes("Next Page"), "should contain pagination link");
@@ -105,14 +108,9 @@ Deno.test("snapshot: JS-rendered page has dynamically created content", async ()
   const ctx = await setup();
   try {
     await ctx.browser.navigate(ctx.fixtures.url("js-rendered.html"));
-    const result = await ctx.snapshots.snapshot(
-      {},
-      evaluateInPage(ctx.browser),
-    );
+    const result = await ctx.snapshots.snapshot({});
 
-    // Verify JS-rendered DOM structure (article + heading roles prove script executed;
-    // raw text like "Alice" also appears in the <script> source and would pass even
-    // if JS never ran).
+    // Verify JS-rendered DOM structure (article + heading roles prove script executed)
     assert(result.yaml.includes("- article"), "should contain article roles from JS-rendered DOM");
     assert(
       result.yaml.includes('heading "Alice"'),
@@ -172,6 +170,27 @@ Deno.test("eval: extract JS-rendered review data", async () => {
       { user: "Alice", text: "Excellent product!" },
       { user: "Bob", text: "Average quality." },
     ]);
+  } finally {
+    await teardown(ctx);
+  }
+});
+
+// --- Refs integration test ---
+
+Deno.test("snapshot: refs map to valid backendDOMNodeIds", async () => {
+  const ctx = await setup();
+  try {
+    await ctx.browser.navigate(ctx.fixtures.url("bestseller-table.html"));
+    const result = await ctx.snapshots.snapshot({});
+
+    // Refs should be populated with positive integers
+    const refEntries = Object.entries(result.refs);
+    assert(refEntries.length > 0, "should have refs");
+    for (const [ref, backendNodeId] of refEntries) {
+      assert(ref.startsWith("e"), `ref should start with 'e': ${ref}`);
+      assert(typeof backendNodeId === "number", `backendNodeId should be number: ${backendNodeId}`);
+      assert(backendNodeId > 0, `backendNodeId should be positive: ${backendNodeId}`);
+    }
   } finally {
     await teardown(ctx);
   }

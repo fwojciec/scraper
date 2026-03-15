@@ -7,7 +7,7 @@ function stubDeps(overrides: Partial<CliDeps> = {}): CliDeps {
       Promise.resolve({ status: "started" as const, chromePid: 456, cdpPort: 9222 }),
     stopChrome: () => Promise.resolve(),
     navigate: () => Promise.resolve(),
-    snapshot: () => Promise.resolve({ yaml: "- heading" }),
+    snapshot: () => Promise.resolve({ yaml: "- heading", refs: {} }),
     evaluate: () => Promise.resolve({ result: null }),
     screenshot: () => Promise.resolve("/tmp/shot.png"),
     stdout: () => {},
@@ -186,7 +186,7 @@ Deno.test("snapshot prints YAML", async () => {
   const code = await runCli(
     ["snapshot"],
     stubDeps({
-      snapshot: () => Promise.resolve({ yaml }),
+      snapshot: () => Promise.resolve({ yaml, refs: {} }),
       stdout: io.stdout,
     }),
   );
@@ -199,9 +199,9 @@ Deno.test("snapshot passes all options", async () => {
   const code = await runCli(
     ["snapshot", "--max-depth", "5", "--max-nodes", "100", "--selector", "#main"],
     stubDeps({
-      snapshot: (opts) => {
+      snapshot: (opts: Record<string, unknown>) => {
         receivedOpts = { ...opts };
-        return Promise.resolve({ yaml: "- heading" });
+        return Promise.resolve({ yaml: "- heading", refs: {} });
       },
     }),
   );
