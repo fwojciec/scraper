@@ -445,12 +445,9 @@ async function selectPage(targetId: string): Promise<void> {
   await refsStore.remove();
 }
 
-/** Run snapshot pipeline and persist refs. */
-async function doSnapshot(
-  page: CdpPageService,
-  opts?: { maxDepth?: number; maxNodes?: number; selector?: string },
-) {
-  const snapshotSvc = createSnapshotService({
+/** Build a SnapshotService bound to a page connection. */
+function snapshotServiceFor(page: CdpPageService) {
+  return createSnapshotService({
     async getFullAXTree() {
       return await page.getFullAXTree() as AXNode[];
     },
@@ -458,6 +455,14 @@ async function doSnapshot(
       return await page.resolveSelector(selector);
     },
   });
+}
+
+/** Run snapshot pipeline and persist refs. */
+async function doSnapshot(
+  page: CdpPageService,
+  opts?: { maxDepth?: number; maxNodes?: number; selector?: string },
+) {
+  const snapshotSvc = snapshotServiceFor(page);
   const result = await snapshotSvc.snapshot(opts ?? {});
   await refsStore.write(result.refs);
   return result;
@@ -468,8 +473,11 @@ async function postAction(
   page: CdpPageService,
   opts?: ActionOptions,
 ): Promise<ActionResult> {
-  await page.waitForNetworkIdle();
+  const timedOut = await page.waitForNetworkIdle();
   if (opts?.includeSnapshot) {
+    if (timedOut) {
+      console.error("warning: network idle timed out — snapshot may reflect incomplete page state");
+    }
     const snapshot = await doSnapshot(page);
     return { snapshot };
   }

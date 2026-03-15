@@ -68,6 +68,9 @@ Commands:
   wait        Wait for a condition
 `;
 
+/** Flags that never take a value argument. */
+const BOOLEAN_FLAGS = new Set(["snapshot", "attach", "full-page"]);
+
 function parseFlags(
   args: string[],
 ): { positional: string[]; flags: Record<string, string | true> } {
@@ -80,6 +83,9 @@ function parseFlags(
       const eqIdx = raw.indexOf("=");
       if (eqIdx !== -1) {
         flags[raw.slice(0, eqIdx)] = raw.slice(eqIdx + 1);
+        i++;
+      } else if (BOOLEAN_FLAGS.has(raw)) {
+        flags[raw] = true;
         i++;
       } else if (i + 1 < args.length && !args[i + 1].startsWith("--")) {
         flags[raw] = args[i + 1];

@@ -36,8 +36,8 @@ export interface CdpPageService extends BrowserService {
   ): () => void;
   /** Handle a JavaScript dialog (accept/dismiss). */
   handleDialog(accept: boolean, promptText?: string): Promise<void>;
-  /** Wait for network idle: 0 in-flight requests for graceMs, up to timeoutMs. */
-  waitForNetworkIdle(graceMs?: number, timeoutMs?: number): Promise<void>;
+  /** Wait for network idle: 0 in-flight requests for graceMs, up to timeoutMs. Returns true if timed out. */
+  waitForNetworkIdle(graceMs?: number, timeoutMs?: number): Promise<boolean>;
   /** Wait for an element matching selector to exist in the DOM. */
   waitForSelector(selector: string, timeoutMs?: number): Promise<void>;
   /** Wait for text to appear on the page. */
@@ -502,9 +502,22 @@ export async function createPageConnection(
   /** Press a keyboard key (dispatched to the focused element). */
   async function pressKey(descriptor: string): Promise<void> {
     // Parse modifier prefixes (e.g., "Control+a", "Shift+Enter")
-    const parts = descriptor.split("+");
-    const key = parts.pop()!;
-    const modifiers = parts;
+    // Use lastIndexOf to handle "+" as a key (e.g., "Shift++", "+")
+    let modifiers: string[];
+    let key: string;
+    const lastPlus = descriptor.lastIndexOf("+");
+    if (lastPlus === -1 || lastPlus === 0) {
+      // No modifier separator, or descriptor is "+" itself
+      modifiers = [];
+      key = descriptor;
+    } else if (lastPlus === descriptor.length - 1) {
+      // Trailing "+": the key is "+", modifiers are everything before
+      modifiers = descriptor.slice(0, lastPlus - 1).split("+").filter((s) => s !== "");
+      key = "+";
+    } else {
+      modifiers = descriptor.slice(0, lastPlus).split("+");
+      key = descriptor.slice(lastPlus + 1);
+    }
 
     // Map well-known key names to their text representation
     const textMap: Record<string, string> = {
@@ -618,11 +631,11 @@ export async function createPageConnection(
     );
   }
 
-  /** Wait for network idle: 0 in-flight requests for graceMs, up to timeoutMs. */
+  /** Wait for network idle: 0 in-flight requests for graceMs, up to timeoutMs. Returns true if timed out. */
   async function waitForNetworkIdle(
     graceMs = 500,
     timeoutMs = 5000,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const deadline = Date.now() + timeoutMs;
     let idleSince = inflightRequests.size === 0 ? Date.now() : 0;
 
@@ -635,13 +648,14 @@ export async function createPageConnection(
 
       if (inflightRequests.size === 0) {
         if (idleSince === 0) idleSince = Date.now();
-        if (Date.now() - idleSince >= graceMs) return;
+        if (Date.now() - idleSince >= graceMs) return false;
       } else {
         idleSince = 0;
       }
       await new Promise((r) => setTimeout(r, 50));
     }
     // Timeout is not an error — action succeeded, page may still be loading
+    return true;
   }
 
   /** Wait for an element matching selector to exist in the DOM. */

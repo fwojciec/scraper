@@ -21,7 +21,7 @@ function stubPage(overrides: Partial<CdpPageService> = {}): CdpPageService {
     uploadFile: () => Promise.resolve(),
     onDialog: () => () => {},
     handleDialog: () => Promise.resolve(),
-    waitForNetworkIdle: () => Promise.resolve(),
+    waitForNetworkIdle: () => Promise.resolve(false),
     waitForSelector: () => Promise.resolve(),
     waitForText: () => Promise.resolve(),
     waitForTextInElement: () => Promise.resolve(),
