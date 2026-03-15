@@ -476,13 +476,12 @@ async function doSnapshot(
 async function postAction(
   page: CdpPageService,
   opts?: ActionOptions,
+  warn?: (msg: string) => void,
 ): Promise<ActionResult> {
   const timedOut = await page.waitForNetworkIdle();
   if (opts?.includeSnapshot) {
-    if (timedOut) {
-      // console.error is intentional: postAction runs in the composition root,
-      // outside the CliDeps boundary, so there is no injected stderr.
-      console.error("warning: network idle timed out — snapshot may reflect incomplete page state");
+    if (timedOut && warn) {
+      warn("warning: network idle timed out — snapshot may reflect incomplete page state\n");
     }
     const snapshot = await doSnapshot(page);
     return { snapshot };
@@ -554,11 +553,12 @@ async function withDialogHandling<T>(
 function executeAction(
   page: CdpPageService,
   action: () => Promise<void>,
-  opts?: ActionOptions,
+  opts: ActionOptions | undefined,
+  warn: (msg: string) => void,
 ): Promise<ActionResult> {
   return withDialogHandling(page, opts?.onDialog, async () => {
     await action();
-    return await postAction(page, opts);
+    return await postAction(page, opts, warn);
   });
 }
 
@@ -570,12 +570,12 @@ const deps: CliDeps = {
       return await withDialogHandling(page, opts?.onDialog, async () => {
         await page.navigate(url);
         if (opts?.includeSnapshot) {
-          return await postAction(page, opts);
+          return await postAction(page, opts, deps.stderr);
         }
         // Navigation without --snapshot: wait for network idle, then invalidate refs
         const timedOut = await page.waitForNetworkIdle();
         if (timedOut) {
-          console.error("warning: network idle timed out after navigation");
+          deps.stderr("warning: network idle timed out after navigation\n");
         }
         await refsStore.remove();
         return {};
@@ -597,7 +597,7 @@ const deps: CliDeps = {
     return withPageConnection(async (page) => {
       const refs = await refsStore.read();
       const objectId = await resolveTarget(target, page, refs);
-      return await executeAction(page, () => page.clickElement(objectId), opts);
+      return await executeAction(page, () => page.clickElement(objectId), opts, deps.stderr);
     });
   },
   fill(target: ElementTarget, value: string, opts?: ActionOptions) {
@@ -608,6 +608,7 @@ const deps: CliDeps = {
         page,
         () => page.fillElement(objectId, value),
         opts,
+        deps.stderr,
       );
     });
   },
@@ -619,6 +620,7 @@ const deps: CliDeps = {
         page,
         () => page.typeText(objectId, text),
         opts,
+        deps.stderr,
       );
     });
   },
@@ -630,6 +632,7 @@ const deps: CliDeps = {
         page,
         () => page.selectOption(objectId, value),
         opts,
+        deps.stderr,
       );
     });
   },
@@ -641,6 +644,7 @@ const deps: CliDeps = {
         page,
         () => page.submitForm(objectId),
         opts,
+        deps.stderr,
       );
     });
   },
@@ -657,6 +661,7 @@ const deps: CliDeps = {
           await page.pressKey(key);
         },
         opts,
+        deps.stderr,
       );
     });
   },
@@ -668,6 +673,7 @@ const deps: CliDeps = {
         page,
         () => page.uploadFile(objectId, filePath),
         opts,
+        deps.stderr,
       );
     });
   },
