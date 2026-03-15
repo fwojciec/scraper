@@ -1,24 +1,9 @@
 /** AXNode→AriaNode transformer. Converts Chrome CDP Accessibility tree to our AriaNode format. */
 
+import type { AXNode, AXValue } from "../domain/ax.ts";
 import type { RefMap } from "../domain/snapshot.ts";
 
-/** Chrome CDP AXValue. */
-export interface AXValue {
-  type: string;
-  value?: string | number | boolean;
-}
-
-/** Chrome CDP AXNode from Accessibility.getFullAXTree(). */
-export interface AXNode {
-  nodeId: string;
-  ignored?: boolean;
-  role?: AXValue;
-  name?: AXValue;
-  properties?: Array<{ name: string; value: AXValue }>;
-  childIds?: string[];
-  backendDOMNodeId?: number;
-  parentId?: string;
-}
+export type { AXNode, AXValue };
 
 /** ARIA node in the accessibility tree. */
 export interface AriaNode {

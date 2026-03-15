@@ -1,5 +1,6 @@
 /** CDP connection: browser-level and page-level connections. */
 
+import type { AXNode } from "../domain/ax.ts";
 import type { BrowserService } from "../domain/browser.ts";
 import type { EvalResult } from "../domain/eval.ts";
 import type { PageInfo } from "../domain/page.ts";
@@ -7,8 +8,7 @@ import type { PageInfo } from "../domain/page.ts";
 /** Page-level CDP connection — attached to a specific target. */
 export interface CdpPageService extends BrowserService {
   close(): void;
-  // deno-lint-ignore no-explicit-any
-  getFullAXTree(): Promise<any>;
+  getFullAXTree(): Promise<AXNode[]>;
   resolveSelector(selector: string): Promise<number>;
   /** Resolve a backendNodeId to a RemoteObjectId. Throws if stale. */
   resolveRef(backendNodeId: number, refName: string): Promise<string>;
@@ -230,8 +230,7 @@ export async function createPageConnection(
     return path;
   }
 
-  // deno-lint-ignore no-explicit-any
-  async function getFullAXTree(): Promise<any> {
+  async function getFullAXTree(): Promise<AXNode[]> {
     const response = await cdp.Accessibility.getFullAXTree(null, sessionId);
     return response.nodes;
   }

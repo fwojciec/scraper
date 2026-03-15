@@ -14,7 +14,7 @@ import {
   readDevToolsActivePort,
   resolveTarget,
 } from "./cdp/mod.ts";
-import { type AXNode, createSnapshotService } from "./aria/mod.ts";
+import { createSnapshotService } from "./aria/mod.ts";
 import { createJsonFileStore } from "./fs/mod.ts";
 import type {
   ActionOptions,
@@ -451,7 +451,7 @@ async function selectPage(targetId: string): Promise<void> {
 function snapshotServiceFor(page: CdpPageService) {
   return createSnapshotService({
     async getFullAXTree() {
-      return await page.getFullAXTree() as AXNode[];
+      return await page.getFullAXTree();
     },
     async resolveSelector(selector: string) {
       return await page.resolveSelector(selector);
