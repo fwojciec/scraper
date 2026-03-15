@@ -3,5 +3,5 @@
 .vscode/
 .idea/
 tmp/
-.log
+*.log
 scraper
