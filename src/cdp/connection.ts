@@ -6,6 +6,7 @@ import type { EvalResult } from "../domain/eval.ts";
 import type { PageInfo } from "../domain/page.ts";
 import { createDialogHandler } from "./dialog.ts";
 import { createInputMethods } from "./input.ts";
+import { createNetworkTracker } from "./network.ts";
 
 /** Page-level CDP connection — attached to a specific target. */
 export interface CdpPageService extends BrowserService {
@@ -143,27 +144,7 @@ export async function createPageConnection(
   await cdp.DOM.enable(null, sessionId);
   await cdp.Network.enable(null, sessionId);
 
-  // --- Network idle tracker ---
-  // Track in-flight requests by requestId (Set) to handle redirects correctly:
-  // redirects fire multiple requestWillBeSent for the same requestId but only
-  // one terminal event (loadingFinished/loadingFailed).
-  const inflightRequests = new Map<string, number>();
-  const STALE_REQUEST_MS = 30_000;
-  const IGNORED_REQUEST_TYPES = new Set(["WebSocket", "EventSource"]);
-  // deno-lint-ignore no-explicit-any
-  cdp.Network.addEventListener("requestWillBeSent", (e: any) => {
-    if (e.sessionId === sessionId && !IGNORED_REQUEST_TYPES.has(e.params.type)) {
-      inflightRequests.set(e.params.requestId, Date.now());
-    }
-  });
-  // deno-lint-ignore no-explicit-any
-  cdp.Network.addEventListener("loadingFinished", (e: any) => {
-    if (e.sessionId === sessionId) inflightRequests.delete(e.params.requestId);
-  });
-  // deno-lint-ignore no-explicit-any
-  cdp.Network.addEventListener("loadingFailed", (e: any) => {
-    if (e.sessionId === sessionId) inflightRequests.delete(e.params.requestId);
-  });
+  const network = createNetworkTracker(cdp, sessionId);
 
   // deno-lint-ignore no-explicit-any
   async function waitForLoad(cdpClient: any, sid: string): Promise<void> {
@@ -324,34 +305,6 @@ export async function createPageConnection(
   const input = createInputMethods(cdp, sessionId);
   const dialog = createDialogHandler(cdp, sessionId);
 
-  /** Wait for network idle: 0 in-flight requests for graceMs, up to timeoutMs. Returns true if timed out. */
-  async function waitForNetworkIdle(
-    graceMs = 500,
-    timeoutMs = 5000,
-  ): Promise<boolean> {
-    const deadline = Date.now() + timeoutMs;
-    let idleSince = inflightRequests.size === 0 ? Date.now() : 0;
-
-    while (Date.now() < deadline) {
-      // Evict stale requests that never received a terminal event.
-      // Deleting during Map for...of iteration is safe per ES spec.
-      const now = Date.now();
-      for (const [id, startTime] of inflightRequests) {
-        if (now - startTime >= STALE_REQUEST_MS) inflightRequests.delete(id);
-      }
-
-      if (inflightRequests.size === 0) {
-        if (idleSince === 0) idleSince = Date.now();
-        if (Date.now() - idleSince >= graceMs) return false;
-      } else {
-        idleSince = 0;
-      }
-      await new Promise((r) => setTimeout(r, 50));
-    }
-    // Timeout is not an error — action succeeded, page may still be loading
-    return true;
-  }
-
   /** Wait for an element matching selector to exist in the DOM. */
   async function waitForSelector(
     selector: string,
@@ -427,6 +380,7 @@ export async function createPageConnection(
   }
 
   function close(): void {
+    network.cleanup();
     dialog.cleanup();
     try {
       cdp.connection?.close();
@@ -453,7 +407,7 @@ export async function createPageConnection(
     uploadFile: input.uploadFile,
     onDialog: dialog.onDialog,
     handleDialog: dialog.handleDialog,
-    waitForNetworkIdle,
+    waitForNetworkIdle: network.waitForNetworkIdle,
     waitForSelector,
     waitForText,
     waitForTextInElement,
