@@ -439,10 +439,9 @@ async function selectPage(targetId: string): Promise<void> {
 
     // Update state with new targetId (single read, no race)
     await stateStore.write({ ...state, targetId });
+    // Old refs are meaningless for the new page
+    await refsStore.remove();
   });
-
-  // Old refs are meaningless for the new page
-  await refsStore.remove();
 }
 
 /** Build a SnapshotService bound to a page connection. */

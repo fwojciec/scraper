@@ -512,7 +512,7 @@ export async function createPageConnection(
       key = descriptor;
     } else if (lastPlus === descriptor.length - 1) {
       // Trailing "+": the key is "+", modifiers are everything before
-      modifiers = descriptor.slice(0, lastPlus - 1).split("+").filter((s) => s !== "");
+      modifiers = descriptor.slice(0, lastPlus).split("+").filter((s) => s !== "");
       key = "+";
     } else {
       modifiers = descriptor.slice(0, lastPlus).split("+");
