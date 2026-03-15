@@ -7,6 +7,7 @@ import type { PageInfo } from "../domain/page.ts";
 import { createDialogHandler } from "./dialog.ts";
 import { createInputMethods } from "./input.ts";
 import { createNetworkTracker } from "./network.ts";
+import { createWaitMethods } from "./wait.ts";
 
 /** Page-level CDP connection — attached to a specific target. */
 export interface CdpPageService extends BrowserService {
@@ -304,80 +305,7 @@ export async function createPageConnection(
 
   const input = createInputMethods(cdp, sessionId);
   const dialog = createDialogHandler(cdp, sessionId);
-
-  /** Wait for an element matching selector to exist in the DOM. */
-  async function waitForSelector(
-    selector: string,
-    timeoutMs = 5000,
-  ): Promise<void> {
-    const deadline = Date.now() + timeoutMs;
-    let delay = 100;
-
-    while (Date.now() < deadline) {
-      const result = await cdp.Runtime.evaluate(
-        {
-          expression: `document.querySelector(${JSON.stringify(selector)}) !== null`,
-          returnByValue: true,
-        },
-        sessionId,
-      );
-      if (result.result.value === true) return;
-      await new Promise((r) => setTimeout(r, Math.min(delay, deadline - Date.now())));
-      delay = Math.min(delay * 2, 1000);
-    }
-    throw new Error(`timed out waiting for selector "${selector}" (${timeoutMs}ms)`);
-  }
-
-  /** Wait for text to appear on the page. */
-  async function waitForText(
-    text: string,
-    timeoutMs = 5000,
-  ): Promise<void> {
-    const deadline = Date.now() + timeoutMs;
-    let delay = 100;
-
-    while (Date.now() < deadline) {
-      const result = await cdp.Runtime.evaluate(
-        {
-          expression: `(document.body?.innerText ?? '').includes(${JSON.stringify(text)})`,
-          returnByValue: true,
-        },
-        sessionId,
-      );
-      if (result.result.value === true) return;
-      await new Promise((r) => setTimeout(r, Math.min(delay, deadline - Date.now())));
-      delay = Math.min(delay * 2, 1000);
-    }
-    throw new Error(`timed out waiting for text "${text}" (${timeoutMs}ms)`);
-  }
-
-  /** Wait for text within an element identified by objectId. */
-  async function waitForTextInElement(
-    objectId: string,
-    text: string,
-    timeoutMs = 5000,
-  ): Promise<void> {
-    const deadline = Date.now() + timeoutMs;
-    let delay = 100;
-
-    while (Date.now() < deadline) {
-      const result = await cdp.Runtime.callFunctionOn(
-        {
-          objectId,
-          functionDeclaration: `function(searchText) {
-            return (this.innerText ?? '').includes(searchText);
-          }`,
-          arguments: [{ value: text }],
-          returnByValue: true,
-        },
-        sessionId,
-      );
-      if (result.result.value === true) return;
-      await new Promise((r) => setTimeout(r, Math.min(delay, deadline - Date.now())));
-      delay = Math.min(delay * 2, 1000);
-    }
-    throw new Error(`timed out waiting for text "${text}" in element (${timeoutMs}ms)`);
-  }
+  const waits = createWaitMethods(cdp, sessionId);
 
   function close(): void {
     network.cleanup();
@@ -408,9 +336,9 @@ export async function createPageConnection(
     onDialog: dialog.onDialog,
     handleDialog: dialog.handleDialog,
     waitForNetworkIdle: network.waitForNetworkIdle,
-    waitForSelector,
-    waitForText,
-    waitForTextInElement,
+    waitForSelector: waits.waitForSelector,
+    waitForText: waits.waitForText,
+    waitForTextInElement: waits.waitForTextInElement,
     close,
   };
 }

@@ -37,6 +37,35 @@
     <div id="file-output"></div>
     <div id="dialog-output"></div>
 
+    <!-- Attribute-driven wait test: element exists but class added after delay -->
+    <div id="attr-target">waiting</div>
+    <button
+      id="add-class-btn"
+      onclick="setTimeout(() => document.getElementById('attr-target').classList.add('ready'), 200)"
+    >
+      Add Class
+    </button>
+
+    <!-- Style-driven visibility test: text hidden, then shown via style change -->
+    <div id="hidden-text" style="display: none">Secret Text</div>
+    <button
+      id="show-text-btn"
+      onclick="setTimeout(() => document.getElementById('hidden-text').style.display = '', 200)"
+    >
+      Show
+    </button>
+
+    <!-- Ancestor-driven visibility test: child text hidden because parent is display:none -->
+    <div id="ancestor-wrapper" style="display: none">
+      <span id="nested-text">Nested Secret</span>
+    </div>
+    <button
+      id="show-ancestor-btn"
+      onclick="setTimeout(() => document.getElementById('ancestor-wrapper').style.display = '', 200)"
+    >
+      Show Ancestor
+    </button>
+
     <script>
       document.getElementById("greet-btn").addEventListener("click", () => {
         const name = document.getElementById("name-input").value;

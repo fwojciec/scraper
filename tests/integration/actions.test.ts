@@ -513,6 +513,121 @@ Deno.test("actions: --on-dialog handles alert, confirm, prompt", async () => {
   }
 });
 
+Deno.test("actions: wait --selector detects attribute changes", async () => {
+  const tmpHome = await Deno.makeTempDir();
+  const fixtures = startFixtureServer();
+  const env = { ...Deno.env.toObject(), HOME: tmpHome, DENO_DIR: await denoDir() };
+
+  try {
+    const start = await runScraper(["start"], env);
+    assertEquals(start.code, 0, `start failed: ${start.stderr}`);
+
+    await runScraper(["navigate", fixtures.url("actions.html")], env);
+
+    // Click button that adds .ready class after 200ms
+    await runScraper(["click", "--selector", "#add-class-btn"], env);
+
+    // Wait for the class to be added
+    const wait = await runScraper(
+      ["wait", "--selector", "#attr-target.ready", "--timeout", "3000"],
+      env,
+    );
+    assertEquals(wait.code, 0, `wait --selector for class failed: ${wait.stderr}`);
+    assertStringIncludes(wait.stdout, "found element");
+
+    const stop = await runScraper(["stop"], env);
+    assertEquals(stop.code, 0, `stop failed: ${stop.stderr}`);
+  } finally {
+    try {
+      const stateText = await Deno.readTextFile(`${tmpHome}/.scraper/chrome.json`);
+      const state = JSON.parse(stateText);
+      if (state.chromePid) Deno.kill(state.chromePid, "SIGTERM");
+    } catch { /* state may not exist or Chrome may be dead */ }
+    await fixtures.close();
+    try {
+      await Deno.remove(tmpHome, { recursive: true });
+    } catch { /* best effort */ }
+  }
+});
+
+Deno.test("actions: wait --text detects style-driven visibility", async () => {
+  const tmpHome = await Deno.makeTempDir();
+  const fixtures = startFixtureServer();
+  const env = { ...Deno.env.toObject(), HOME: tmpHome, DENO_DIR: await denoDir() };
+
+  try {
+    const start = await runScraper(["start"], env);
+    assertEquals(start.code, 0, `start failed: ${start.stderr}`);
+
+    await runScraper(["navigate", fixtures.url("actions.html")], env);
+
+    // Click button that removes display:none after 200ms
+    await runScraper(["click", "--selector", "#show-text-btn"], env);
+
+    // Wait for hidden text to become visible
+    const wait = await runScraper(
+      ["wait", "--text", "Secret Text", "--timeout", "3000"],
+      env,
+    );
+    assertEquals(wait.code, 0, `wait --text for style visibility failed: ${wait.stderr}`);
+    assertStringIncludes(wait.stdout, "found text");
+
+    const stop = await runScraper(["stop"], env);
+    assertEquals(stop.code, 0, `stop failed: ${stop.stderr}`);
+  } finally {
+    try {
+      const stateText = await Deno.readTextFile(`${tmpHome}/.scraper/chrome.json`);
+      const state = JSON.parse(stateText);
+      if (state.chromePid) Deno.kill(state.chromePid, "SIGTERM");
+    } catch { /* state may not exist or Chrome may be dead */ }
+    await fixtures.close();
+    try {
+      await Deno.remove(tmpHome, { recursive: true });
+    } catch { /* best effort */ }
+  }
+});
+
+Deno.test("actions: wait --text in element detects ancestor visibility change", async () => {
+  const tmpHome = await Deno.makeTempDir();
+  const fixtures = startFixtureServer();
+  const env = { ...Deno.env.toObject(), HOME: tmpHome, DENO_DIR: await denoDir() };
+
+  try {
+    const start = await runScraper(["start"], env);
+    assertEquals(start.code, 0, `start failed: ${start.stderr}`);
+
+    await runScraper(["navigate", fixtures.url("actions.html")], env);
+
+    // Click button that removes display:none from parent after 200ms
+    await runScraper(["click", "--selector", "#show-ancestor-btn"], env);
+
+    // Wait for text in nested element to become visible via ancestor change
+    const wait = await runScraper(
+      ["wait", "--selector", "#nested-text", "--text", "Nested Secret", "--timeout", "3000"],
+      env,
+    );
+    assertEquals(
+      wait.code,
+      0,
+      `wait --text in element for ancestor visibility failed: ${wait.stderr}`,
+    );
+    assertStringIncludes(wait.stdout, "found text");
+
+    const stop = await runScraper(["stop"], env);
+    assertEquals(stop.code, 0, `stop failed: ${stop.stderr}`);
+  } finally {
+    try {
+      const stateText = await Deno.readTextFile(`${tmpHome}/.scraper/chrome.json`);
+      const state = JSON.parse(stateText);
+      if (state.chromePid) Deno.kill(state.chromePid, "SIGTERM");
+    } catch { /* state may not exist or Chrome may be dead */ }
+    await fixtures.close();
+    try {
+      await Deno.remove(tmpHome, { recursive: true });
+    } catch { /* best effort */ }
+  }
+});
+
 Deno.test("actions: wait --timeout times out with clear error", async () => {
   const tmpHome = await Deno.makeTempDir();
   const fixtures = startFixtureServer();
