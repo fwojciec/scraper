@@ -9,7 +9,7 @@
 # Loop continues until all issues are complete.
 
 set -e
-trap 'echo ""; echo "Interrupted."; exit 130' INT TERM
+trap 'echo ""; echo "Interrupted."; trap - INT TERM; kill 0 2>/dev/null; exit 130' INT TERM
 
 if [ $# -eq 0 ]; then
     echo "Usage: ./ralph.sh \"<milestone-name>\""
@@ -66,7 +66,9 @@ while :; do
         break
     fi
 
-    # Run one iteration
+    # Run pipeline in background so `wait` is interruptible by signals.
+    # Foreground pipelines block trap delivery until the pipeline finishes,
+    # and claude catches SIGINT internally, so Ctrl-C would hang.
     set +e
     "$CLAUDE" -p "/ralph $MILESTONE" \
         --dangerously-skip-permissions \
@@ -94,16 +96,13 @@ while :; do
                 "\n--- Iteration complete ---"
             else empty
             end
-        ' 2>/dev/null
-    claude_exit=${PIPESTATUS[0]:-0}
-    jq_exit=${PIPESTATUS[2]:-0}
+        ' 2>/dev/null &
+    wait $! 2>/dev/null
+    pipeline_exit=$?
     set -e
 
-    if [ "$claude_exit" -ne 0 ]; then
-        echo "WARNING: Claude exited with code $claude_exit" | tee -a "$LOGFILE"
-    fi
-    if [ "$jq_exit" -ne 0 ]; then
-        echo "WARNING: jq stream processing exited with code $jq_exit" | tee -a "$LOGFILE"
+    if [ "$pipeline_exit" -ne 0 ]; then
+        echo "WARNING: Pipeline exited with code $pipeline_exit" | tee -a "$LOGFILE"
     fi
 
     # Check if signaled complete
