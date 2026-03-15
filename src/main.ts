@@ -266,7 +266,7 @@ async function startAttach(channel?: string): Promise<StartResult> {
   const wsUrl = buildBrowserWsUrl(port, wsPath);
 
   // Attempt to connect with timeout — Chrome may show an approval dialog
-  let timerId: number;
+  let timerId: number | undefined;
   const timeoutPromise = new Promise<never>((_, reject) => {
     timerId = setTimeout(
       () => reject(new Error("timed out waiting for Chrome — approve the dialog in Chrome")),
@@ -291,7 +291,7 @@ async function startAttach(channel?: string): Promise<StartResult> {
       `connection denied — approve the dialog in Chrome, or check chrome://inspect/#remote-debugging (${msg})`,
     );
   } finally {
-    clearTimeout(timerId!);
+    if (timerId !== undefined) clearTimeout(timerId);
   }
 
   await stateStore.write({

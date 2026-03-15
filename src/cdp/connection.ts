@@ -145,10 +145,11 @@ export async function createPageConnection(
   // Track in-flight requests by requestId (Set) to handle redirects correctly:
   // redirects fire multiple requestWillBeSent for the same requestId but only
   // one terminal event (loadingFinished/loadingFailed).
-  const inflightRequests = new Set<string>();
+  const inflightRequests = new Map<string, number>();
+  const STALE_REQUEST_MS = 30_000;
   // deno-lint-ignore no-explicit-any
   cdp.Network.addEventListener("requestWillBeSent", (e: any) => {
-    if (e.sessionId === sessionId) inflightRequests.add(e.params.requestId);
+    if (e.sessionId === sessionId) inflightRequests.set(e.params.requestId, Date.now());
   });
   // deno-lint-ignore no-explicit-any
   cdp.Network.addEventListener("loadingFinished", (e: any) => {
@@ -156,6 +157,12 @@ export async function createPageConnection(
   });
   // deno-lint-ignore no-explicit-any
   cdp.Network.addEventListener("loadingFailed", (e: any) => {
+    if (e.sessionId === sessionId) inflightRequests.delete(e.params.requestId);
+  });
+  // Fallback terminal event for data URIs, cached responses, and service worker synthetic responses
+  // that may not fire loadingFinished/loadingFailed.
+  // deno-lint-ignore no-explicit-any
+  cdp.Network.addEventListener("responseReceived", (e: any) => {
     if (e.sessionId === sessionId) inflightRequests.delete(e.params.requestId);
   });
 
@@ -378,11 +385,11 @@ export async function createPageConnection(
     // Type each character via key events
     for (const char of text) {
       await cdp.Input.dispatchKeyEvent(
-        { type: "keyDown", text: char },
+        { type: "keyDown", key: char, text: char },
         sessionId,
       );
       await cdp.Input.dispatchKeyEvent(
-        { type: "keyUp" },
+        { type: "keyUp", key: char },
         sessionId,
       );
     }
@@ -457,8 +464,44 @@ export async function createPageConnection(
     }
   }
 
+  /** Map logical key names to physical key codes for CDP Input.dispatchKeyEvent. */
+  function keyToCode(k: string): string {
+    const map: Record<string, string> = {
+      Enter: "Enter",
+      Tab: "Tab",
+      Escape: "Escape",
+      Space: "Space",
+      Backspace: "Backspace",
+      Delete: "Delete",
+      ArrowUp: "ArrowUp",
+      ArrowDown: "ArrowDown",
+      ArrowLeft: "ArrowLeft",
+      ArrowRight: "ArrowRight",
+      Home: "Home",
+      End: "End",
+      PageUp: "PageUp",
+      PageDown: "PageDown",
+      Control: "ControlLeft",
+      Shift: "ShiftLeft",
+      Alt: "AltLeft",
+      Meta: "MetaLeft",
+    };
+    if (map[k]) return map[k];
+    if (k.length === 1) {
+      const c = k.toLowerCase();
+      if (c >= "a" && c <= "z") return `Key${c.toUpperCase()}`;
+      if (c >= "0" && c <= "9") return `Digit${c}`;
+    }
+    return k;
+  }
+
   /** Press a keyboard key (dispatched to the focused element). */
-  async function pressKey(key: string): Promise<void> {
+  async function pressKey(descriptor: string): Promise<void> {
+    // Parse modifier prefixes (e.g., "Control+a", "Shift+Enter")
+    const parts = descriptor.split("+");
+    const key = parts.pop()!;
+    const modifiers = parts;
+
     // Map well-known key names to their text representation
     const textMap: Record<string, string> = {
       Enter: "\r",
@@ -466,21 +509,38 @@ export async function createPageConnection(
       Tab: "\t",
     };
     const text = textMap[key];
+    const code = keyToCode(key);
+
+    // Press modifier keys
+    for (const mod of modifiers) {
+      await cdp.Input.dispatchKeyEvent(
+        { type: "rawKeyDown", key: mod, code: keyToCode(mod) },
+        sessionId,
+      );
+    }
 
     await cdp.Input.dispatchKeyEvent(
-      { type: "rawKeyDown", key, code: key, ...(text ? { text } : {}) },
+      { type: "rawKeyDown", key, code, ...(text ? { text } : {}) },
       sessionId,
     );
     if (text) {
       await cdp.Input.dispatchKeyEvent(
-        { type: "char", key, code: key, text },
+        { type: "char", key, code, text },
         sessionId,
       );
     }
     await cdp.Input.dispatchKeyEvent(
-      { type: "keyUp", key, code: key },
+      { type: "keyUp", key, code },
       sessionId,
     );
+
+    // Release modifier keys (reverse order)
+    for (const mod of modifiers.reverse()) {
+      await cdp.Input.dispatchKeyEvent(
+        { type: "keyUp", key: mod, code: keyToCode(mod) },
+        sessionId,
+      );
+    }
   }
 
   /** Upload a file to an input[type=file] element. */
@@ -559,6 +619,12 @@ export async function createPageConnection(
     let idleSince = inflightRequests.size === 0 ? Date.now() : 0;
 
     while (Date.now() < deadline) {
+      // Evict stale requests that never received a terminal event
+      const now = Date.now();
+      for (const [id, startTime] of inflightRequests) {
+        if (now - startTime >= STALE_REQUEST_MS) inflightRequests.delete(id);
+      }
+
       if (inflightRequests.size === 0) {
         if (idleSince === 0) idleSince = Date.now();
         if (Date.now() - idleSince >= graceMs) return;
