@@ -4,6 +4,7 @@ import type { AXNode } from "../domain/ax.ts";
 import type { BrowserService } from "../domain/browser.ts";
 import type { EvalResult } from "../domain/eval.ts";
 import type { PageInfo } from "../domain/page.ts";
+import { createDialogHandler } from "./dialog.ts";
 import { createInputMethods } from "./input.ts";
 
 /** Page-level CDP connection — attached to a specific target. */
@@ -321,45 +322,7 @@ export async function createPageConnection(
   }
 
   const input = createInputMethods(cdp, sessionId);
-
-  // --- Dialog handler ---
-  let dialogHandler:
-    | ((type: string, message: string, defaultPrompt: string) => void)
-    | null = null;
-
-  // deno-lint-ignore no-explicit-any
-  cdp.Page.addEventListener("javascriptDialogOpening", (e: any) => {
-    if (e.sessionId === sessionId && dialogHandler) {
-      dialogHandler(
-        e.params.type,
-        e.params.message,
-        e.params.defaultPrompt ?? "",
-      );
-    }
-  });
-
-  /** Single-listener design: only one handler at a time. */
-  function onDialog(
-    handler: (type: string, message: string, defaultPrompt: string) => void,
-  ): () => void {
-    if (dialogHandler) {
-      throw new Error("dialog handler already registered — clean up the previous one first");
-    }
-    dialogHandler = handler;
-    return () => {
-      dialogHandler = null;
-    };
-  }
-
-  async function handleDialog(
-    accept: boolean,
-    promptText?: string,
-  ): Promise<void> {
-    await cdp.Page.handleJavaScriptDialog(
-      { accept, ...(promptText !== undefined ? { promptText } : {}) },
-      sessionId,
-    );
-  }
+  const dialog = createDialogHandler(cdp, sessionId);
 
   /** Wait for network idle: 0 in-flight requests for graceMs, up to timeoutMs. Returns true if timed out. */
   async function waitForNetworkIdle(
@@ -464,6 +427,7 @@ export async function createPageConnection(
   }
 
   function close(): void {
+    dialog.cleanup();
     try {
       cdp.connection?.close();
     } catch {
@@ -487,8 +451,8 @@ export async function createPageConnection(
     focusElement: input.focusElement,
     pressKey: input.pressKey,
     uploadFile: input.uploadFile,
-    onDialog,
-    handleDialog,
+    onDialog: dialog.onDialog,
+    handleDialog: dialog.handleDialog,
     waitForNetworkIdle,
     waitForSelector,
     waitForText,
