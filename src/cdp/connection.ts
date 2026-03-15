@@ -147,9 +147,12 @@ export async function createPageConnection(
   // one terminal event (loadingFinished/loadingFailed).
   const inflightRequests = new Map<string, number>();
   const STALE_REQUEST_MS = 30_000;
+  const IGNORED_REQUEST_TYPES = new Set(["WebSocket", "EventSource"]);
   // deno-lint-ignore no-explicit-any
   cdp.Network.addEventListener("requestWillBeSent", (e: any) => {
-    if (e.sessionId === sessionId) inflightRequests.set(e.params.requestId, Date.now());
+    if (e.sessionId === sessionId && !IGNORED_REQUEST_TYPES.has(e.params.type)) {
+      inflightRequests.set(e.params.requestId, Date.now());
+    }
   });
   // deno-lint-ignore no-explicit-any
   cdp.Network.addEventListener("loadingFinished", (e: any) => {
@@ -283,41 +286,38 @@ export async function createPageConnection(
 
   /** Resolve CSS selector to a RemoteObjectId. Error on 0 or >1 matches. */
   async function resolveUniqueSelector(selector: string): Promise<string> {
+    const sel = JSON.stringify(selector);
+    // Single evaluate to atomically count and return the element (avoids TOCTOU race)
     const evalResult = await cdp.Runtime.evaluate(
       {
-        expression: `document.querySelectorAll(${JSON.stringify(selector)}).length`,
-        returnByValue: true,
-      },
-      sessionId,
-    );
-
-    if (evalResult.exceptionDetails) {
-      const msg = evalResult.exceptionDetails.text ??
-        evalResult.exceptionDetails.exception?.description ??
-        "querySelectorAll failed";
-      throw new Error(msg);
-    }
-
-    const count = evalResult.result.value as number;
-    if (count === 0) {
-      throw new Error(`selector "${selector}" did not match any element`);
-    }
-    if (count > 1) {
-      throw new Error(
-        `selector "${selector}" matched ${count} elements, expected exactly 1`,
-      );
-    }
-
-    // Exactly 1 match — get its objectId
-    const singleResult = await cdp.Runtime.evaluate(
-      {
-        expression: `document.querySelector(${JSON.stringify(selector)})`,
+        expression: `(() => {
+          const sel = ${sel};
+          const els = document.querySelectorAll(sel);
+          if (els.length === 0) throw new Error("no_match:" + els.length);
+          if (els.length > 1) throw new Error("multiple:" + els.length);
+          return els[0];
+        })()`,
         returnByValue: false,
       },
       sessionId,
     );
 
-    return singleResult.result.objectId;
+    if (evalResult.exceptionDetails) {
+      const desc = evalResult.exceptionDetails.exception?.description ??
+        evalResult.exceptionDetails.text ?? "";
+      if (desc.includes("no_match:")) {
+        throw new Error(`selector "${selector}" did not match any element`);
+      }
+      if (desc.includes("multiple:")) {
+        const count = desc.split("multiple:")[1];
+        throw new Error(
+          `selector "${selector}" matched ${count} elements, expected exactly 1`,
+        );
+      }
+      throw new Error(desc || "querySelectorAll failed");
+    }
+
+    return evalResult.result.objectId;
   }
 
   /** Click element at the given RemoteObjectId using real pointer events. */

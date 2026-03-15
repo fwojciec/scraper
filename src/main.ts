@@ -524,6 +524,7 @@ async function withDialogHandling<T>(
     if (dialogErrors.length) throw dialogErrors[0];
     return result;
   } catch (err) {
+    cleanup();
     await Promise.all(handlePromises);
     if (dialogErrors.length) {
       throw new AggregateError(
@@ -561,7 +562,8 @@ const deps: CliDeps = {
         if (opts?.includeSnapshot) {
           return await postAction(page, opts);
         }
-        // Navigation without --snapshot invalidates refs
+        // Navigation without --snapshot: wait for network idle, then invalidate refs
+        await page.waitForNetworkIdle();
         await refsStore.remove();
         return {};
       });
