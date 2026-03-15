@@ -1,9 +1,14 @@
 import { assert, assertEquals, assertGreater, assertRejects } from "@std/assert";
 import { type ChromeProcess, killChrome, launchChrome } from "../../src/cdp/chrome.ts";
-import { type CdpBrowserService, createCdpConnection } from "../../src/cdp/connection.ts";
+import {
+  type CdpPageService,
+  createPageConnection,
+  discoverWsUrl,
+} from "../../src/cdp/connection.ts";
 
 let chrome: ChromeProcess;
 let targetId: string;
+let wsUrl: string;
 
 /** Discover the initial page target from /json/list with retries. */
 async function discoverPageTarget(port: number): Promise<string> {
@@ -25,13 +30,14 @@ async function discoverPageTarget(port: number): Promise<string> {
 }
 
 /** Launch Chrome and discover the initial page target. */
-async function setup(): Promise<CdpBrowserService> {
+async function setup(): Promise<CdpPageService> {
   chrome = await launchChrome();
   targetId = await discoverPageTarget(chrome.port);
-  return await createCdpConnection(chrome.port, targetId);
+  wsUrl = await discoverWsUrl(chrome.port);
+  return await createPageConnection(wsUrl, targetId);
 }
 
-async function teardown(browser?: CdpBrowserService) {
+async function teardown(browser?: CdpPageService) {
   try {
     browser?.close();
   } catch { /* connection may not have been established */ }
@@ -104,7 +110,7 @@ Deno.test("reconnect: new connection to same target works", async () => {
     browserA.close();
 
     // Reconnect to same target
-    const browserB = await createCdpConnection(chrome.port, targetId);
+    const browserB = await createPageConnection(wsUrl, targetId);
     try {
       const result = await browserB.evaluate(
         "document.querySelector('h1').textContent",
@@ -130,7 +136,7 @@ Deno.test("stale target: clean error when target is gone", async () => {
     await new Promise((r) => setTimeout(r, 200));
 
     await assertRejects(
-      () => createCdpConnection(chrome.port, targetId),
+      () => createPageConnection(wsUrl, targetId),
       Error,
       "target no longer exists",
     );

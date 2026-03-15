@@ -2,7 +2,11 @@
 
 import { assert, assertEquals } from "@std/assert";
 import { type ChromeProcess, killChrome, launchChrome } from "../../src/cdp/chrome.ts";
-import { type CdpBrowserService, createCdpConnection } from "../../src/cdp/connection.ts";
+import {
+  type CdpPageService,
+  createPageConnection,
+  discoverWsUrl,
+} from "../../src/cdp/connection.ts";
 import { type AXNode, createSnapshotService } from "../../src/aria/mod.ts";
 import type { SnapshotService } from "../../src/domain/browser.ts";
 import { type FixtureServer, startFixtureServer } from "./fixture-server.ts";
@@ -10,7 +14,7 @@ import { type FixtureServer, startFixtureServer } from "./fixture-server.ts";
 interface TestContext {
   fixtures: FixtureServer;
   chrome: ChromeProcess;
-  browser: CdpBrowserService;
+  browser: CdpPageService;
   snapshots: SnapshotService;
 }
 
@@ -38,7 +42,8 @@ async function setup(): Promise<TestContext> {
     partial.fixtures = startFixtureServer();
     partial.chrome = await launchChrome();
     const targetId = await discoverPageTarget(partial.chrome.port);
-    partial.browser = await createCdpConnection(partial.chrome.port, targetId);
+    const wsUrl = await discoverWsUrl(partial.chrome.port);
+    partial.browser = await createPageConnection(wsUrl, targetId);
     partial.snapshots = createSnapshotService({
       async getFullAXTree() {
         return await partial.browser!.getFullAXTree() as AXNode[];

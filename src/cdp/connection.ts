@@ -1,13 +1,21 @@
-/** CDP connection implementing BrowserService for a single target. */
+/** CDP connection: browser-level and page-level connections. */
 
 import type { BrowserService } from "../domain/browser.ts";
 import type { EvalResult } from "../domain/eval.ts";
+import type { PageInfo } from "../domain/page.ts";
 
-export interface CdpBrowserService extends BrowserService {
+/** Page-level CDP connection — attached to a specific target. */
+export interface CdpPageService extends BrowserService {
   close(): void;
   // deno-lint-ignore no-explicit-any
   getFullAXTree(): Promise<any>;
   resolveSelector(selector: string): Promise<number>;
+}
+
+/** Browser-level CDP connection — not attached to any target. */
+export interface CdpBrowserService {
+  listPages(activeTargetId?: string): Promise<PageInfo[]>;
+  close(): void;
 }
 
 // simple-cdp's JSR .d.ts incorrectly uses `export type` for value exports.
@@ -21,7 +29,7 @@ async function loadCdp(): Promise<any> {
 }
 
 /** Discover the WebSocket debugger URL from Chrome's /json/version endpoint. */
-async function discoverWsUrl(port: number): Promise<string> {
+export async function discoverWsUrl(port: number): Promise<string> {
   const res = await fetch(`http://127.0.0.1:${port}/json/version`);
   if (!res.ok) {
     await res.body?.cancel();
@@ -31,12 +39,51 @@ async function discoverWsUrl(port: number): Promise<string> {
   return info.webSocketDebuggerUrl;
 }
 
-/** Create a CDP connection to Chrome on the given port, attaching to a specific target. */
-export async function createCdpConnection(
-  port: number,
-  targetId: string,
+/** Build a browser-level WebSocket URL. */
+export function buildBrowserWsUrl(port: number, wsPath: string): string {
+  return `ws://127.0.0.1:${port}${wsPath}`;
+}
+
+/**
+ * Create a browser-level CDP connection (no target attached).
+ * Used for page management: listing pages, switching targets.
+ */
+export async function createBrowserConnection(
+  wsUrl: string,
 ): Promise<CdpBrowserService> {
-  const wsUrl = await discoverWsUrl(port);
+  const { CDP } = await loadCdp();
+  const cdp = new CDP({ webSocketDebuggerUrl: wsUrl });
+
+  async function listPages(activeTargetId?: string): Promise<PageInfo[]> {
+    const { targetInfos } = await cdp.Target.getTargets();
+    return targetInfos
+      // deno-lint-ignore no-explicit-any
+      .filter((t: any) => t.type === "page")
+      // deno-lint-ignore no-explicit-any
+      .map((t: any) => ({
+        targetId: t.targetId,
+        url: t.url,
+        title: t.title,
+        active: t.targetId === activeTargetId,
+      }));
+  }
+
+  function close(): void {
+    try {
+      cdp.connection?.close();
+    } catch {
+      // Connection already closed
+    }
+  }
+
+  return { listPages, close };
+}
+
+/** Create a page-level CDP connection, attaching to a specific target. */
+export async function createPageConnection(
+  wsUrl: string,
+  targetId: string,
+): Promise<CdpPageService> {
   const { CDP } = await loadCdp();
   const cdp = new CDP({ webSocketDebuggerUrl: wsUrl });
 
@@ -51,7 +98,7 @@ export async function createCdpConnection(
     try {
       cdp.connection?.close();
     } catch { /* ignore */ }
-    throw new Error("target no longer exists — run 'scraper stop' then 'scraper start'");
+    throw new Error("target no longer exists — run 'scraper pages' to pick a new tab");
   }
 
   await cdp.Page.enable(null, sessionId);

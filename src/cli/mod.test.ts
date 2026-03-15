@@ -10,6 +10,8 @@ function stubDeps(overrides: Partial<CliDeps> = {}): CliDeps {
     snapshot: () => Promise.resolve({ yaml: "- heading", refs: {} }),
     evaluate: () => Promise.resolve({ result: null }),
     screenshot: () => Promise.resolve("/tmp/shot.png"),
+    listPages: () => Promise.resolve([]),
+    selectPage: () => Promise.resolve(),
     stdout: () => {},
     stderr: () => {},
     ...overrides,
@@ -315,4 +317,140 @@ Deno.test("screenshot reports error from dep", async () => {
   );
   assertEquals(code, 1);
   assertStringIncludes(io.err, "chrome is not running");
+});
+
+// --- start --attach ---
+
+Deno.test("start --attach prints attached message with port", async () => {
+  const io = capture();
+  const code = await runCli(
+    ["start", "--attach"],
+    stubDeps({
+      startChrome: (opts) => {
+        assertEquals(opts.attach, true);
+        return Promise.resolve({ status: "attached" as const, cdpPort: 9333 });
+      },
+      stdout: io.stdout,
+    }),
+  );
+  assertEquals(code, 0);
+  assertStringIncludes(io.out, "attached to Chrome");
+  assertStringIncludes(io.out, "9333");
+  assertStringIncludes(io.out, "scraper pages");
+});
+
+Deno.test("start --attach --channel passes channel option", async () => {
+  let receivedChannel: string | undefined;
+  const code = await runCli(
+    ["start", "--attach", "--channel", "beta"],
+    stubDeps({
+      startChrome: (opts) => {
+        receivedChannel = opts.channel;
+        return Promise.resolve({ status: "attached" as const, cdpPort: 9333 });
+      },
+    }),
+  );
+  assertEquals(code, 0);
+  assertEquals(receivedChannel, "beta");
+});
+
+Deno.test("start already attached prints info without pid", async () => {
+  const io = capture();
+  const code = await runCli(
+    ["start", "--attach"],
+    stubDeps({
+      startChrome: () => Promise.resolve({ status: "already_running" as const, cdpPort: 9333 }),
+      stdout: io.stdout,
+    }),
+  );
+  assertEquals(code, 0);
+  assertStringIncludes(io.out, "already attached");
+  assertStringIncludes(io.out, "9333");
+});
+
+// --- pages ---
+
+Deno.test("pages lists open tabs", async () => {
+  const io = capture();
+  const code = await runCli(
+    ["pages"],
+    stubDeps({
+      listPages: () =>
+        Promise.resolve([
+          { targetId: "abc", url: "https://example.com", title: "Example", active: true },
+          { targetId: "def", url: "about:blank", title: "", active: false },
+        ]),
+      stdout: io.stdout,
+    }),
+  );
+  assertEquals(code, 0);
+  assertStringIncludes(io.out, "* abc");
+  assertStringIncludes(io.out, "Example");
+  assertStringIncludes(io.out, "  def");
+});
+
+Deno.test("pages shows message when no tabs", async () => {
+  const io = capture();
+  const code = await runCli(
+    ["pages"],
+    stubDeps({
+      listPages: () => Promise.resolve([]),
+      stdout: io.stdout,
+    }),
+  );
+  assertEquals(code, 0);
+  assertStringIncludes(io.out, "no open tabs");
+});
+
+Deno.test("pages reports error from dep", async () => {
+  const io = capture();
+  const code = await runCli(
+    ["pages"],
+    stubDeps({
+      listPages: () => Promise.reject(new Error("chrome is not running")),
+      stderr: io.stderr,
+    }),
+  );
+  assertEquals(code, 1);
+  assertStringIncludes(io.err, "chrome is not running");
+});
+
+// --- page ---
+
+Deno.test("page switches active tab", async () => {
+  let receivedId = "";
+  const io = capture();
+  const code = await runCli(
+    ["page", "abc-123"],
+    stubDeps({
+      selectPage: (id) => {
+        receivedId = id;
+        return Promise.resolve();
+      },
+      stdout: io.stdout,
+    }),
+  );
+  assertEquals(code, 0);
+  assertEquals(receivedId, "abc-123");
+  assertStringIncludes(io.out, "switched to page abc-123");
+});
+
+Deno.test("page without targetId returns error", async () => {
+  const io = capture();
+  const code = await runCli(["page"], stubDeps({ stderr: io.stderr }));
+  assertEquals(code, 1);
+  assertStringIncludes(io.err, "targetId is required");
+});
+
+Deno.test("page reports error from dep", async () => {
+  const io = capture();
+  const code = await runCli(
+    ["page", "abc-123"],
+    stubDeps({
+      selectPage: () => Promise.reject(new Error("no page with targetId")),
+      stderr: io.stderr,
+    }),
+  );
+  assertEquals(code, 1);
+  assertStringIncludes(io.err, "no page with targetId");
 });

@@ -2,21 +2,43 @@
 // `scraper start` launches Chrome and exits. All other commands connect to CDP directly.
 
 import { type CliDeps, runCli, type StartOptions, type StartResult } from "./cli/mod.ts";
-import { type CdpBrowserService, createCdpConnection, launchChrome } from "./cdp/mod.ts";
+import {
+  buildBrowserWsUrl,
+  type CdpBrowserService,
+  type CdpPageService,
+  createBrowserConnection,
+  createPageConnection,
+  defaultUserDataDir,
+  discoverWsUrl,
+  launchChrome,
+  readDevToolsActivePort,
+} from "./cdp/mod.ts";
 import { type AXNode, createSnapshotService } from "./aria/mod.ts";
 import { createJsonFileStore } from "./fs/mod.ts";
-import type { RefMap } from "./domain/mod.ts";
+import type { PageInfo, RefMap } from "./domain/mod.ts";
 
 const HOME = Deno.env.get("HOME");
 if (!HOME) throw new Error("HOME environment variable is not set");
 const STATE_PATH = `${HOME}/.scraper/chrome.json`;
 
-interface ChromeState {
+/** Owned mode: we launched Chrome. */
+interface OwnedState {
+  mode: "owned";
   chromePid: number;
   cdpPort: number;
   userDataDir: string;
   targetId: string;
 }
+
+/** Attached mode: connected to user's Chrome. targetId absent until `page <id>`. */
+interface AttachedState {
+  mode: "attached";
+  cdpPort: number;
+  wsPath: string;
+  targetId?: string;
+}
+
+type ChromeState = OwnedState | AttachedState;
 
 const stateStore = createJsonFileStore<ChromeState>(STATE_PATH);
 const REFS_PATH = `${HOME}/.scraper/refs.json`;
@@ -56,20 +78,20 @@ function isOurChromeProcess(pid: number, userDataDir: string): boolean {
 }
 
 /**
- * Classify recorded state into one of three ownership states:
+ * Classify owned state into one of three ownership states:
  * - "dead": PID is not alive. Safe to clean up everything.
  * - "ours": PID alive AND its command line contains our --user-data-dir.
  * - "foreign": PID alive but it's not our Chrome (recycled PID).
  */
-function classifyState(state: ChromeState): "dead" | "ours" | "foreign" {
+function classifyOwnedState(state: OwnedState): "dead" | "ours" | "foreign" {
   if (!isProcessAlive(state.chromePid)) return "dead";
   return isOurChromeProcess(state.chromePid, state.userDataDir) ? "ours" : "foreign";
 }
 
 /** Probe Chrome's CDP endpoint. */
-async function isCdpResponding(state: ChromeState): Promise<boolean> {
+async function isCdpResponding(port: number): Promise<boolean> {
   try {
-    const res = await fetch(`http://127.0.0.1:${state.cdpPort}/json/version`);
+    const res = await fetch(`http://127.0.0.1:${port}/json/version`);
     await res.body?.cancel();
     return res.ok;
   } catch {
@@ -78,10 +100,10 @@ async function isCdpResponding(state: ChromeState): Promise<boolean> {
 }
 
 /**
- * Clean up after a confirmed-dead Chrome process.
+ * Clean up after a confirmed-dead owned Chrome process.
  * Only safe to call when isProcessAlive(state.chromePid) is false.
  */
-async function cleanupDeadChrome(state: ChromeState): Promise<void> {
+async function cleanupDeadChrome(state: OwnedState): Promise<void> {
   try {
     await Deno.remove(state.userDataDir, { recursive: true });
   } catch { /* best effort */ }
@@ -120,15 +142,32 @@ async function discoverPageTarget(port: number): Promise<string> {
 const STOP_POLL_INTERVAL_MS = 100;
 const STOP_TIMEOUT_MS = 5000;
 
+/** Resolve a browser-level WebSocket URL from state. */
+async function browserWsUrl(state: ChromeState): Promise<string> {
+  if (state.mode === "attached") {
+    return buildBrowserWsUrl(state.cdpPort, state.wsPath);
+  }
+  return await discoverWsUrl(state.cdpPort);
+}
+
 async function startChrome(opts: StartOptions): Promise<StartResult> {
+  if (opts.attach) {
+    return await startAttach(opts.channel);
+  }
+
   const existing = await stateStore.read();
 
   if (existing) {
-    const ownership = classifyState(existing);
+    if (existing.mode === "attached") {
+      // Attached session exists — user should stop it first.
+      throw new Error("already attached to Chrome — run 'scraper stop' first");
+    }
+
+    const ownership = classifyOwnedState(existing);
 
     if (ownership === "ours") {
       // Our Chrome is alive. Use CDP probe to check if it's healthy.
-      if (await isCdpResponding(existing)) {
+      if (await isCdpResponding(existing.cdpPort)) {
         return {
           status: "already_running",
           chromePid: existing.chromePid,
@@ -168,6 +207,7 @@ async function startChrome(opts: StartOptions): Promise<StartResult> {
 
     // Write state
     await stateStore.write({
+      mode: "owned",
       chromePid: chrome.pid,
       cdpPort: chrome.port,
       userDataDir: chrome.userDataDir,
@@ -190,13 +230,85 @@ async function startChrome(opts: StartOptions): Promise<StartResult> {
   }
 }
 
+const ATTACH_TIMEOUT_MS = 30_000;
+
+async function startAttach(channel?: string): Promise<StartResult> {
+  const existing = await stateStore.read();
+  if (existing) {
+    if (existing.mode === "attached") {
+      // Already attached — check if CDP still responds
+      if (await isCdpResponding(existing.cdpPort)) {
+        return { status: "already_running", cdpPort: existing.cdpPort };
+      }
+      // Stale attached state — clean up
+      await stateStore.remove();
+      await refsStore.remove();
+    } else {
+      // Owned Chrome running — user should stop it first
+      throw new Error("Chrome was launched by scraper — run 'scraper stop' first");
+    }
+  }
+
+  // New session = old refs are stale
+  await refsStore.remove();
+
+  const userDataDir = defaultUserDataDir(channel);
+  const { port, wsPath } = await readDevToolsActivePort(userDataDir);
+  const wsUrl = buildBrowserWsUrl(port, wsPath);
+
+  // Attempt to connect with timeout — Chrome may show an approval dialog
+  let timerId: number;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timerId = setTimeout(
+      () => reject(new Error("timed out waiting for Chrome — approve the dialog in Chrome")),
+      ATTACH_TIMEOUT_MS,
+    );
+  });
+
+  try {
+    const connectAndVerify = async () => {
+      const browser = await createBrowserConnection(wsUrl);
+      try {
+        await browser.listPages();
+      } finally {
+        browser.close();
+      }
+    };
+    await Promise.race([connectAndVerify(), timeoutPromise]);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes("timed out")) throw err;
+    throw new Error(
+      `connection denied — approve the dialog in Chrome, or check chrome://inspect/#remote-debugging (${msg})`,
+    );
+  } finally {
+    clearTimeout(timerId!);
+  }
+
+  await stateStore.write({
+    mode: "attached",
+    cdpPort: port,
+    wsPath,
+  });
+
+  return { status: "attached", cdpPort: port };
+}
+
 async function stopChrome(): Promise<void> {
   const state = await stateStore.read();
   if (!state) {
     throw new Error("chrome is not running");
   }
 
-  const ownership = classifyState(state);
+  if (state.mode === "attached") {
+    // Attached mode — just remove state files, don't kill Chrome
+    await stateStore.remove();
+    await refsStore.remove();
+    return;
+  }
+
+  // Owned mode
+  const ownership = classifyOwnedState(state);
 
   if (ownership === "dead") {
     await cleanupDeadChrome(state);
@@ -244,38 +356,59 @@ async function stopChrome(): Promise<void> {
 }
 
 /**
- * Read state, verify Chrome ownership, connect to CDP, run an operation, and close.
- *
- * Ownership is verified by checking the process command line for our --user-data-dir.
- *
- * Failure modes:
- * - No state file → "chrome is not running"
- * - PID dead → clean up, "chrome is not running"
- * - PID recycled (not our Chrome) → remove state file, "chrome is not running"
- * - Our Chrome alive → connect to CDP; errors propagate as-is (no state cleanup)
+ * Validate state and get a browser-level WebSocket URL.
+ * Verifies owned Chrome is alive; for attached mode, just returns the URL.
  */
-async function withConnection<T>(
-  fn: (browser: CdpBrowserService) => Promise<T>,
-): Promise<T> {
+async function resolveState(): Promise<{ state: ChromeState; wsUrl: string }> {
   const state = await stateStore.read();
-  if (!state) throw new Error("chrome is not running");
+  if (!state) throw new Error("chrome is not running — run 'scraper start'");
 
-  const ownership = classifyState(state);
-
-  if (ownership === "dead") {
-    await cleanupDeadChrome(state);
-    throw new Error("chrome is not running — run 'scraper start'");
+  if (state.mode === "owned") {
+    const ownership = classifyOwnedState(state);
+    if (ownership === "dead") {
+      await cleanupDeadChrome(state);
+      throw new Error("chrome is not running — run 'scraper start'");
+    }
+    if (ownership === "foreign") {
+      await stateStore.remove();
+      throw new Error("chrome is not running — run 'scraper start'");
+    }
   }
 
-  if (ownership === "foreign") {
-    await stateStore.remove();
-    throw new Error("chrome is not running — run 'scraper start'");
+  const wsUrl = await browserWsUrl(state);
+  return { state, wsUrl };
+}
+
+/**
+ * Browser-level connection: no targetId needed.
+ * Used by `pages`, `page`, and `stop`.
+ */
+async function withBrowserConnection<T>(
+  fn: (browser: CdpBrowserService, state: ChromeState) => Promise<T>,
+): Promise<T> {
+  const { state, wsUrl } = await resolveState();
+  const browser = await createBrowserConnection(wsUrl);
+  try {
+    return await fn(browser, state);
+  } finally {
+    browser.close();
+  }
+}
+
+/**
+ * Page-level connection: targetId required.
+ * Used by navigate, snapshot, eval, screenshot, and all actions.
+ */
+async function withPageConnection<T>(
+  fn: (browser: CdpPageService) => Promise<T>,
+): Promise<T> {
+  const { state, wsUrl } = await resolveState();
+
+  if (!state.targetId) {
+    throw new Error("no page selected — run 'scraper pages' then 'scraper page <id>'");
   }
 
-  // "ours" — Chrome is alive. Connect to CDP. If createCdpConnection fails
-  // (e.g. stale target, transient CDP issue), let it propagate without
-  // deleting state so Chrome is not orphaned.
-  const browser = await createCdpConnection(state.cdpPort, state.targetId);
+  const browser = await createPageConnection(wsUrl, state.targetId);
   try {
     return await fn(browser);
   } finally {
@@ -283,14 +416,41 @@ async function withConnection<T>(
   }
 }
 
+async function listPages(): Promise<PageInfo[]> {
+  return await withBrowserConnection(async (browser, state) => {
+    return await browser.listPages(state.targetId);
+  });
+}
+
+async function selectPage(targetId: string): Promise<void> {
+  await withBrowserConnection(async (browser, state) => {
+    // Verify the target exists
+    const pages = await browser.listPages();
+    const found = pages.find((p) => p.targetId === targetId);
+    if (!found) {
+      throw new Error(`no page with targetId '${targetId}' — run 'scraper pages' to list tabs`);
+    }
+
+    // Update state with new targetId (single read, no race)
+    await stateStore.write({ ...state, targetId });
+  });
+
+  // Old refs are meaningless for the new page
+  await refsStore.remove();
+}
+
 const deps: CliDeps = {
   startChrome,
   stopChrome,
   navigate(url: string): Promise<void> {
-    return withConnection((browser) => browser.navigate(url));
+    return withPageConnection(async (browser) => {
+      await browser.navigate(url);
+      // Navigation invalidates refs
+      await refsStore.remove();
+    });
   },
   snapshot(opts) {
-    return withConnection(async (browser) => {
+    return withPageConnection(async (browser) => {
       const snapshotSvc = createSnapshotService({
         async getFullAXTree() {
           return await browser.getFullAXTree() as AXNode[];
@@ -305,11 +465,13 @@ const deps: CliDeps = {
     });
   },
   evaluate(expression: string) {
-    return withConnection((browser) => browser.evaluate(expression));
+    return withPageConnection((browser) => browser.evaluate(expression));
   },
   screenshot(fullPage?: boolean) {
-    return withConnection((browser) => browser.screenshot(fullPage));
+    return withPageConnection((browser) => browser.screenshot(fullPage));
   },
+  listPages,
+  selectPage,
   stdout: (s) => Deno.stdout.writeSync(encoder.encode(s)),
   stderr: (s) => Deno.stderr.writeSync(encoder.encode(s)),
 };

@@ -1,17 +1,19 @@
 // Adapter: CLI (Deno.args). Direct CDP operations, no HTTP server.
 
-import type { SnapshotOptions, SnapshotResult } from "../domain/mod.ts";
+import type { PageInfo, SnapshotOptions, SnapshotResult } from "../domain/mod.ts";
 
 /** Result of starting Chrome. */
 export interface StartResult {
-  status: "started" | "already_running";
-  chromePid: number;
+  status: "started" | "already_running" | "attached";
+  chromePid?: number;
   cdpPort: number;
 }
 
 /** Options for the start command. */
 export interface StartOptions {
   chromePath?: string;
+  attach?: boolean;
+  channel?: string;
 }
 
 /** Dependencies injected from main.ts composition root. */
@@ -22,6 +24,8 @@ export interface CliDeps {
   snapshot(opts: SnapshotOptions): Promise<SnapshotResult>;
   evaluate(expression: string): Promise<{ result: unknown }>;
   screenshot(fullPage?: boolean): Promise<string>;
+  listPages(): Promise<PageInfo[]>;
+  selectPage(targetId: string): Promise<void>;
   stdout(s: string): void;
   stderr(s: string): void;
 }
@@ -29,12 +33,14 @@ export interface CliDeps {
 const USAGE = `Usage: scraper <command> [options]
 
 Commands:
-  start       Launch Chrome
+  start       Launch or attach to Chrome
   stop        Stop Chrome
   navigate    Navigate to a URL
   snapshot    Generate an ARIA snapshot
   eval        Evaluate JavaScript
   screenshot  Capture a screenshot
+  pages       List open tabs
+  page        Switch active tab
 `;
 
 function parseFlags(
@@ -89,11 +95,21 @@ function flagBoolean(flags: Record<string, string | true>, key: string): boolean
 async function handleStart(args: string[], deps: CliDeps): Promise<number> {
   const { flags } = parseFlags(args);
   const chromePath = flagString(flags, "chrome-path");
+  const attach = flagBoolean(flags, "attach");
+  const channel = flagString(flags, "channel");
 
   try {
-    const result = await deps.startChrome({ chromePath });
+    const result = await deps.startChrome({ chromePath, attach, channel });
     if (result.status === "already_running") {
-      deps.stdout(`chrome already running (pid ${result.chromePid})\n`);
+      if (result.chromePid) {
+        deps.stdout(`chrome already running (pid ${result.chromePid})\n`);
+      } else {
+        deps.stdout(`already attached to Chrome (port ${result.cdpPort})\n`);
+      }
+    } else if (result.status === "attached") {
+      deps.stdout(
+        `attached to Chrome (port ${result.cdpPort}). Run 'scraper pages' to list tabs.\n`,
+      );
     } else {
       deps.stdout(
         `chrome started (pid ${result.chromePid}, cdp port ${result.cdpPort})\n`,
@@ -193,6 +209,42 @@ async function handleScreenshot(args: string[], deps: CliDeps): Promise<number> 
   }
 }
 
+async function handlePages(deps: CliDeps): Promise<number> {
+  try {
+    const pages = await deps.listPages();
+    if (pages.length === 0) {
+      deps.stdout("no open tabs\n");
+      return 0;
+    }
+    for (const page of pages) {
+      const marker = page.active ? "* " : "  ";
+      deps.stdout(`${marker}${page.targetId}  ${page.title}  ${page.url}\n`);
+    }
+    return 0;
+  } catch (err) {
+    deps.stderr(`error: ${err instanceof Error ? err.message : err}\n`);
+    return 1;
+  }
+}
+
+async function handlePage(args: string[], deps: CliDeps): Promise<number> {
+  const { positional } = parseFlags(args);
+  const targetId = positional[0];
+  if (!targetId) {
+    deps.stderr("error: targetId is required\nUsage: scraper page <targetId>\n");
+    return 1;
+  }
+
+  try {
+    await deps.selectPage(targetId);
+    deps.stdout(`switched to page ${targetId}\n`);
+    return 0;
+  } catch (err) {
+    deps.stderr(`error: ${err instanceof Error ? err.message : err}\n`);
+    return 1;
+  }
+}
+
 /** Run the CLI with the given arguments and dependencies. Returns exit code. */
 export function runCli(args: string[], deps: CliDeps): Promise<number> {
   const [command, ...rest] = args;
@@ -215,6 +267,10 @@ export function runCli(args: string[], deps: CliDeps): Promise<number> {
       return handleEval(rest, deps);
     case "screenshot":
       return handleScreenshot(rest, deps);
+    case "pages":
+      return handlePages(deps);
+    case "page":
+      return handlePage(rest, deps);
     default:
       deps.stderr(`error: unknown command '${command}'\n${USAGE}`);
       return Promise.resolve(1);
