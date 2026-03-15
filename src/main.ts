@@ -523,6 +523,17 @@ async function withDialogHandling<T>(
     await Promise.all(handlePromises);
     if (dialogErrors.length) throw dialogErrors[0];
     return result;
+  } catch (err) {
+    await Promise.all(handlePromises);
+    if (dialogErrors.length) {
+      throw new AggregateError(
+        [err, ...dialogErrors],
+        `${err instanceof Error ? err.message : err}; also: ${
+          dialogErrors.map((e) => e.message).join(", ")
+        }`,
+      );
+    }
+    throw err;
   } finally {
     cleanup();
   }

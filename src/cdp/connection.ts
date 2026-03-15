@@ -357,10 +357,11 @@ export async function createPageConnection(
 
   /** Fill an input element: focus, clear, set value, dispatch input+change. */
   async function fillElement(objectId: string, value: string): Promise<void> {
-    await cdp.Runtime.callFunctionOn(
+    const result = await cdp.Runtime.callFunctionOn(
       {
         objectId,
         functionDeclaration: `function(newValue) {
+          if (!('value' in this)) throw new Error('element is not a fillable input');
           this.focus();
           this.value = '';
           this.value = newValue;
@@ -373,6 +374,12 @@ export async function createPageConnection(
       },
       sessionId,
     );
+    if (result.exceptionDetails) {
+      const msg = result.exceptionDetails.exception?.description ??
+        result.exceptionDetails.text ??
+        "fill failed";
+      throw new Error(msg);
+    }
   }
 
   /** Type text character by character: focus, then dispatch key events. */
@@ -532,7 +539,7 @@ export async function createPageConnection(
     );
 
     // Release modifier keys (reverse order)
-    for (const mod of modifiers.reverse()) {
+    for (const mod of [...modifiers].reverse()) {
       await cdp.Input.dispatchKeyEvent(
         { type: "keyUp", key: mod, code: keyToCode(mod) },
         sessionId,
@@ -588,9 +595,13 @@ export async function createPageConnection(
     }
   });
 
+  /** Single-listener design: only one handler at a time. */
   function onDialog(
     handler: (type: string, message: string, defaultPrompt: string) => void,
   ): () => void {
+    if (dialogHandler) {
+      throw new Error("dialog handler already registered — clean up the previous one first");
+    }
     dialogHandler = handler;
     return () => {
       dialogHandler = null;
