@@ -19,6 +19,7 @@ function stubDeps(overrides: Partial<CliDeps> = {}): CliDeps {
     selectOption: () => Promise.resolve({}),
     submit: () => Promise.resolve({}),
     pressKey: () => Promise.resolve({}),
+    upload: () => Promise.resolve({}),
     stdout: () => {},
     stderr: () => {},
     ...overrides,
@@ -1151,4 +1152,198 @@ Deno.test("press-key reports error from dep", async () => {
   );
   assertEquals(code, 1);
   assertStringIncludes(io.err, "chrome is not running");
+});
+
+// --- upload ---
+
+Deno.test("upload --ref with path calls dep correctly", async () => {
+  let receivedTarget: unknown;
+  let receivedPath: string | undefined;
+  const io = capture();
+  const code = await runCli(
+    ["upload", "--ref", "e4", "./document.pdf"],
+    stubDeps({
+      upload: (target, filePath) => {
+        receivedTarget = target;
+        receivedPath = filePath;
+        return Promise.resolve({});
+      },
+      stdout: io.stdout,
+    }),
+  );
+  assertEquals(code, 0);
+  assertEquals(receivedTarget, { ref: "e4" });
+  assertEquals(receivedPath, "./document.pdf");
+  assertStringIncludes(io.out, "uploaded");
+});
+
+Deno.test("upload --selector with path calls dep correctly", async () => {
+  let receivedTarget: unknown;
+  const io = capture();
+  const code = await runCli(
+    ["upload", "--selector", "input[type=file]", "./photo.jpg"],
+    stubDeps({
+      upload: (target) => {
+        receivedTarget = target;
+        return Promise.resolve({});
+      },
+      stdout: io.stdout,
+    }),
+  );
+  assertEquals(code, 0);
+  assertEquals(receivedTarget, { selector: "input[type=file]" });
+  assertStringIncludes(io.out, "uploaded");
+});
+
+Deno.test("upload without path returns error", async () => {
+  const io = capture();
+  const code = await runCli(
+    ["upload", "--ref", "e4"],
+    stubDeps({ stderr: io.stderr }),
+  );
+  assertEquals(code, 1);
+  assertStringIncludes(io.err, "file path is required");
+});
+
+Deno.test("upload without target returns error", async () => {
+  const io = capture();
+  const code = await runCli(
+    ["upload", "./photo.jpg"],
+    stubDeps({ stderr: io.stderr }),
+  );
+  assertEquals(code, 1);
+  assertStringIncludes(io.err, "either --ref or --selector is required");
+});
+
+Deno.test("upload --snapshot outputs YAML", async () => {
+  const io = capture();
+  const code = await runCli(
+    ["upload", "--ref", "e4", "./photo.jpg", "--snapshot"],
+    stubDeps({
+      upload: (_target, _path, opts) => {
+        assertEquals(opts?.includeSnapshot, true);
+        return Promise.resolve({ snapshot: { yaml: "- textbox\n", refs: {} } });
+      },
+      stdout: io.stdout,
+      stderr: io.stderr,
+    }),
+  );
+  assertEquals(code, 0);
+  assertStringIncludes(io.err, "uploaded");
+  assertStringIncludes(io.out, "- textbox");
+});
+
+Deno.test("upload reports error from dep", async () => {
+  const io = capture();
+  const code = await runCli(
+    ["upload", "--ref", "e4", "./photo.jpg"],
+    stubDeps({
+      upload: () => Promise.reject(new Error("element is not a file input")),
+      stderr: io.stderr,
+    }),
+  );
+  assertEquals(code, 1);
+  assertStringIncludes(io.err, "element is not a file input");
+});
+
+// --- --on-dialog flag ---
+
+Deno.test("click --on-dialog accept passes policy to dep", async () => {
+  let receivedOpts: unknown;
+  const code = await runCli(
+    ["click", "--ref", "e5", "--on-dialog", "accept"],
+    stubDeps({
+      click: (_target, opts) => {
+        receivedOpts = opts;
+        return Promise.resolve({});
+      },
+    }),
+  );
+  assertEquals(code, 0);
+  assertEquals(
+    (receivedOpts as { onDialog: unknown }).onDialog,
+    { action: "accept" },
+  );
+});
+
+Deno.test("click --on-dialog dismiss passes policy to dep", async () => {
+  let receivedOpts: unknown;
+  const code = await runCli(
+    ["click", "--ref", "e5", "--on-dialog", "dismiss"],
+    stubDeps({
+      click: (_target, opts) => {
+        receivedOpts = opts;
+        return Promise.resolve({});
+      },
+    }),
+  );
+  assertEquals(code, 0);
+  assertEquals(
+    (receivedOpts as { onDialog: unknown }).onDialog,
+    { action: "dismiss" },
+  );
+});
+
+Deno.test("click --on-dialog accept:answer passes prompt text", async () => {
+  let receivedOpts: unknown;
+  const code = await runCli(
+    ["click", "--ref", "e5", "--on-dialog", "accept:hello"],
+    stubDeps({
+      click: (_target, opts) => {
+        receivedOpts = opts;
+        return Promise.resolve({});
+      },
+    }),
+  );
+  assertEquals(code, 0);
+  assertEquals(
+    (receivedOpts as { onDialog: unknown }).onDialog,
+    { action: "accept", text: "hello" },
+  );
+});
+
+Deno.test("navigate --on-dialog accept passes policy", async () => {
+  let receivedOpts: unknown;
+  const code = await runCli(
+    ["navigate", "https://example.com", "--on-dialog", "accept"],
+    stubDeps({
+      navigate: (_url, opts) => {
+        receivedOpts = opts;
+        return Promise.resolve({});
+      },
+    }),
+  );
+  assertEquals(code, 0);
+  assertEquals(
+    (receivedOpts as { onDialog: unknown }).onDialog,
+    { action: "accept" },
+  );
+});
+
+Deno.test("fill --on-dialog dismiss passes policy", async () => {
+  let receivedOpts: unknown;
+  const code = await runCli(
+    ["fill", "--ref", "e3", "hello", "--on-dialog", "dismiss"],
+    stubDeps({
+      fill: (_target, _value, opts) => {
+        receivedOpts = opts;
+        return Promise.resolve({});
+      },
+    }),
+  );
+  assertEquals(code, 0);
+  assertEquals(
+    (receivedOpts as { onDialog: unknown }).onDialog,
+    { action: "dismiss" },
+  );
+});
+
+Deno.test("--on-dialog with invalid value returns error", async () => {
+  const io = capture();
+  const code = await runCli(
+    ["click", "--ref", "e5", "--on-dialog", "bogus"],
+    stubDeps({ stderr: io.stderr }),
+  );
+  assertEquals(code, 1);
+  assertStringIncludes(io.err, "invalid --on-dialog value");
 });

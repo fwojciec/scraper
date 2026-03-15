@@ -19,6 +19,7 @@ import { createJsonFileStore } from "./fs/mod.ts";
 import type {
   ActionOptions,
   ActionResult,
+  DialogPolicy,
   ElementTarget,
   PageInfo,
   RefMap,
@@ -478,18 +479,75 @@ async function postAction(
   return {};
 }
 
+/**
+ * Wrap an action with dialog detection.
+ * Always-on: registers listener before action, checks after.
+ * With policy: handles dialog per policy.
+ * Without policy: dismisses dialog to unblock, then throws.
+ */
+async function withDialogHandling<T>(
+  page: CdpPageService,
+  policy: DialogPolicy | undefined,
+  fn: () => Promise<T>,
+): Promise<T> {
+  let dialogError: Error | null = null;
+  let handlePromise: Promise<void> | null = null;
+
+  const cleanup = page.onDialog((_type, message) => {
+    if (policy) {
+      handlePromise = page.handleDialog(
+        policy.action === "accept",
+        policy.action === "accept" ? policy.text : undefined,
+      ).catch((err) => {
+        dialogError = new Error(
+          `failed to handle dialog: ${err instanceof Error ? err.message : err}`,
+        );
+      });
+    } else {
+      // Dismiss to unblock the page, then signal error
+      handlePromise = page.handleDialog(false).catch(() => {});
+      dialogError = new Error(
+        `a dialog appeared: "${message}" — retry with --on-dialog accept|dismiss`,
+      );
+    }
+  });
+
+  try {
+    const result = await fn();
+    if (handlePromise) await handlePromise;
+    if (dialogError) throw dialogError;
+    return result;
+  } finally {
+    cleanup();
+  }
+}
+
+/** Execute a mutating action with dialog handling + post-action pipeline. */
+function executeAction(
+  page: CdpPageService,
+  action: () => Promise<void>,
+  opts?: ActionOptions,
+): Promise<ActionResult> {
+  return withDialogHandling(page, opts?.onDialog, async () => {
+    await action();
+    return await postAction(page, opts);
+  });
+}
+
 const deps: CliDeps = {
   startChrome,
   stopChrome,
   navigate(url: string, opts?: ActionOptions) {
     return withPageConnection(async (page) => {
-      await page.navigate(url);
-      if (opts?.includeSnapshot) {
-        return await postAction(page, opts);
-      }
-      // Navigation without --snapshot invalidates refs
-      await refsStore.remove();
-      return {};
+      return await withDialogHandling(page, opts?.onDialog, async () => {
+        await page.navigate(url);
+        if (opts?.includeSnapshot) {
+          return await postAction(page, opts);
+        }
+        // Navigation without --snapshot invalidates refs
+        await refsStore.remove();
+        return {};
+      });
     });
   },
   snapshot(opts) {
@@ -507,51 +565,78 @@ const deps: CliDeps = {
     return withPageConnection(async (page) => {
       const refs = await refsStore.read();
       const objectId = await resolveTarget(target, page, refs);
-      await page.clickElement(objectId);
-      return await postAction(page, opts);
+      return await executeAction(page, () => page.clickElement(objectId), opts);
     });
   },
   fill(target: ElementTarget, value: string, opts?: ActionOptions) {
     return withPageConnection(async (page) => {
       const refs = await refsStore.read();
       const objectId = await resolveTarget(target, page, refs);
-      await page.fillElement(objectId, value);
-      return await postAction(page, opts);
+      return await executeAction(
+        page,
+        () => page.fillElement(objectId, value),
+        opts,
+      );
     });
   },
   type(target: ElementTarget, text: string, opts?: ActionOptions) {
     return withPageConnection(async (page) => {
       const refs = await refsStore.read();
       const objectId = await resolveTarget(target, page, refs);
-      await page.typeText(objectId, text);
-      return await postAction(page, opts);
+      return await executeAction(
+        page,
+        () => page.typeText(objectId, text),
+        opts,
+      );
     });
   },
   selectOption(target: ElementTarget, value: string, opts?: ActionOptions) {
     return withPageConnection(async (page) => {
       const refs = await refsStore.read();
       const objectId = await resolveTarget(target, page, refs);
-      await page.selectOption(objectId, value);
-      return await postAction(page, opts);
+      return await executeAction(
+        page,
+        () => page.selectOption(objectId, value),
+        opts,
+      );
     });
   },
   submit(target: ElementTarget, opts?: ActionOptions) {
     return withPageConnection(async (page) => {
       const refs = await refsStore.read();
       const objectId = await resolveTarget(target, page, refs);
-      await page.submitForm(objectId);
-      return await postAction(page, opts);
+      return await executeAction(
+        page,
+        () => page.submitForm(objectId),
+        opts,
+      );
     });
   },
   pressKey(key: string, target?: ElementTarget, opts?: ActionOptions) {
     return withPageConnection(async (page) => {
-      if (target) {
-        const refs = await refsStore.read();
-        const objectId = await resolveTarget(target, page, refs);
-        await page.focusElement(objectId);
-      }
-      await page.pressKey(key);
-      return await postAction(page, opts);
+      return await executeAction(
+        page,
+        async () => {
+          if (target) {
+            const refs = await refsStore.read();
+            const objectId = await resolveTarget(target, page, refs);
+            await page.focusElement(objectId);
+          }
+          await page.pressKey(key);
+        },
+        opts,
+      );
+    });
+  },
+  upload(target: ElementTarget, filePath: string, opts?: ActionOptions) {
+    return withPageConnection(async (page) => {
+      const refs = await refsStore.read();
+      const objectId = await resolveTarget(target, page, refs);
+      return await executeAction(
+        page,
+        () => page.uploadFile(objectId, filePath),
+        opts,
+      );
     });
   },
   wait(opts: WaitOptions) {

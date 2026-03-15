@@ -382,6 +382,137 @@ Deno.test("actions: type, select, submit, press-key", async () => {
   }
 });
 
+Deno.test("actions: upload sets file on input[type=file]", async () => {
+  const tmpHome = await Deno.makeTempDir();
+  const fixtures = startFixtureServer();
+  const env = { ...Deno.env.toObject(), HOME: tmpHome, DENO_DIR: await denoDir() };
+
+  try {
+    const start = await runScraper(["start"], env);
+    assertEquals(start.code, 0, `start failed: ${start.stderr}`);
+
+    await runScraper(["navigate", fixtures.url("actions.html")], env);
+
+    // Create a temp file to upload
+    const tmpFile = await Deno.makeTempFile({ suffix: ".txt" });
+    await Deno.writeTextFile(tmpFile, "test content");
+
+    // Upload the file
+    const upload = await runScraper(
+      ["upload", "--selector", "#file-input", tmpFile],
+      env,
+    );
+    assertEquals(upload.code, 0, `upload failed: ${upload.stderr}`);
+    assertStringIncludes(upload.stdout, "uploaded");
+
+    // Verify the file was set (change event updates file-output div)
+    const fileOutput = await runScraper(
+      ["eval", "document.getElementById('file-output').textContent"],
+      env,
+    );
+    assertEquals(fileOutput.code, 0);
+    assertStringIncludes(fileOutput.stdout, "file:");
+
+    // Upload on non-file-input should fail
+    const uploadBad = await runScraper(
+      ["upload", "--selector", "#name-input", tmpFile],
+      env,
+    );
+    assertEquals(uploadBad.code, 1, "upload on non-file input should fail");
+    assertStringIncludes(uploadBad.stderr, "not a file input");
+
+    const stop = await runScraper(["stop"], env);
+    assertEquals(stop.code, 0, `stop failed: ${stop.stderr}`);
+  } finally {
+    try {
+      const stateText = await Deno.readTextFile(`${tmpHome}/.scraper/chrome.json`);
+      const state = JSON.parse(stateText);
+      if (state.chromePid) Deno.kill(state.chromePid, "SIGTERM");
+    } catch { /* state may not exist or Chrome may be dead */ }
+    await fixtures.close();
+    try {
+      await Deno.remove(tmpHome, { recursive: true });
+    } catch { /* best effort */ }
+  }
+});
+
+Deno.test("actions: --on-dialog handles alert, confirm, prompt", async () => {
+  const tmpHome = await Deno.makeTempDir();
+  const fixtures = startFixtureServer();
+  const env = { ...Deno.env.toObject(), HOME: tmpHome, DENO_DIR: await denoDir() };
+
+  try {
+    const start = await runScraper(["start"], env);
+    assertEquals(start.code, 0, `start failed: ${start.stderr}`);
+
+    await runScraper(["navigate", fixtures.url("actions.html")], env);
+
+    // Click alert button with --on-dialog accept
+    const alertClick = await runScraper(
+      ["click", "--selector", "#alert-btn", "--on-dialog", "accept"],
+      env,
+    );
+    assertEquals(alertClick.code, 0, `alert click failed: ${alertClick.stderr}`);
+
+    // Verify alert was handled and page continued
+    const alertOutput = await runScraper(
+      ["eval", "document.getElementById('dialog-output').textContent"],
+      env,
+    );
+    assertEquals(alertOutput.code, 0);
+    assertStringIncludes(alertOutput.stdout, "alert:done");
+
+    // Click confirm button with --on-dialog dismiss
+    const confirmClick = await runScraper(
+      ["click", "--selector", "#confirm-btn", "--on-dialog", "dismiss"],
+      env,
+    );
+    assertEquals(confirmClick.code, 0, `confirm click failed: ${confirmClick.stderr}`);
+
+    const confirmOutput = await runScraper(
+      ["eval", "document.getElementById('dialog-output').textContent"],
+      env,
+    );
+    assertEquals(confirmOutput.code, 0);
+    assertStringIncludes(confirmOutput.stdout, "confirm:false");
+
+    // Click prompt button with --on-dialog accept:hello
+    const promptClick = await runScraper(
+      ["click", "--selector", "#prompt-btn", "--on-dialog", "accept:hello"],
+      env,
+    );
+    assertEquals(promptClick.code, 0, `prompt click failed: ${promptClick.stderr}`);
+
+    const promptOutput = await runScraper(
+      ["eval", "document.getElementById('dialog-output').textContent"],
+      env,
+    );
+    assertEquals(promptOutput.code, 0);
+    assertStringIncludes(promptOutput.stdout, "prompt:hello");
+
+    // Click alert button WITHOUT --on-dialog → should fail
+    const noDialogClick = await runScraper(
+      ["click", "--selector", "#alert-btn"],
+      env,
+    );
+    assertEquals(noDialogClick.code, 1, "click triggering dialog without --on-dialog should fail");
+    assertStringIncludes(noDialogClick.stderr, "a dialog appeared");
+
+    const stop = await runScraper(["stop"], env);
+    assertEquals(stop.code, 0, `stop failed: ${stop.stderr}`);
+  } finally {
+    try {
+      const stateText = await Deno.readTextFile(`${tmpHome}/.scraper/chrome.json`);
+      const state = JSON.parse(stateText);
+      if (state.chromePid) Deno.kill(state.chromePid, "SIGTERM");
+    } catch { /* state may not exist or Chrome may be dead */ }
+    await fixtures.close();
+    try {
+      await Deno.remove(tmpHome, { recursive: true });
+    } catch { /* best effort */ }
+  }
+});
+
 Deno.test("actions: wait --timeout times out with clear error", async () => {
   const tmpHome = await Deno.makeTempDir();
   const fixtures = startFixtureServer();

@@ -28,6 +28,14 @@ export interface CdpPageService extends BrowserService {
   focusElement(objectId: string): Promise<void>;
   /** Press a keyboard key (dispatched to the focused element). */
   pressKey(key: string): Promise<void>;
+  /** Upload a file to an input[type=file] element. */
+  uploadFile(objectId: string, filePath: string): Promise<void>;
+  /** Register handler for dialog events. Returns cleanup function. */
+  onDialog(
+    handler: (type: string, message: string, defaultPrompt: string) => void,
+  ): () => void;
+  /** Handle a JavaScript dialog (accept/dismiss). */
+  handleDialog(accept: boolean, promptText?: string): Promise<void>;
   /** Wait for network idle: 0 in-flight requests for graceMs, up to timeoutMs. */
   waitForNetworkIdle(graceMs?: number, timeoutMs?: number): Promise<void>;
   /** Wait for an element matching selector to exist in the DOM. */
@@ -475,6 +483,73 @@ export async function createPageConnection(
     );
   }
 
+  /** Upload a file to an input[type=file] element. */
+  async function uploadFile(objectId: string, filePath: string): Promise<void> {
+    // Verify it's a file input
+    const checkResult = await cdp.Runtime.callFunctionOn(
+      {
+        objectId,
+        functionDeclaration:
+          "function() { return this.tagName === 'INPUT' && this.type === 'file'; }",
+        returnByValue: true,
+      },
+      sessionId,
+    );
+    if (checkResult.exceptionDetails) {
+      const msg = checkResult.exceptionDetails.exception?.description ??
+        checkResult.exceptionDetails.text ?? "check failed";
+      throw new Error(msg);
+    }
+    if (!checkResult.result.value) {
+      throw new Error("element is not a file input");
+    }
+
+    // Get backendNodeId
+    const desc = await cdp.DOM.describeNode({ objectId }, sessionId);
+    const backendNodeId = desc.node.backendNodeId;
+
+    // Set the file
+    await cdp.DOM.setFileInputFiles(
+      { files: [filePath], backendNodeId },
+      sessionId,
+    );
+  }
+
+  // --- Dialog handler ---
+  let dialogHandler:
+    | ((type: string, message: string, defaultPrompt: string) => void)
+    | null = null;
+
+  // deno-lint-ignore no-explicit-any
+  cdp.Page.addEventListener("javascriptDialogOpening", (e: any) => {
+    if (e.sessionId === sessionId && dialogHandler) {
+      dialogHandler(
+        e.params.type,
+        e.params.message,
+        e.params.defaultPrompt ?? "",
+      );
+    }
+  });
+
+  function onDialog(
+    handler: (type: string, message: string, defaultPrompt: string) => void,
+  ): () => void {
+    dialogHandler = handler;
+    return () => {
+      dialogHandler = null;
+    };
+  }
+
+  async function handleDialog(
+    accept: boolean,
+    promptText?: string,
+  ): Promise<void> {
+    await cdp.Page.handleJavaScriptDialog(
+      { accept, ...(promptText !== undefined ? { promptText } : {}) },
+      sessionId,
+    );
+  }
+
   /** Wait for network idle: 0 in-flight requests for graceMs, up to timeoutMs. */
   async function waitForNetworkIdle(
     graceMs = 500,
@@ -592,6 +667,9 @@ export async function createPageConnection(
     submitForm,
     focusElement,
     pressKey,
+    uploadFile,
+    onDialog,
+    handleDialog,
     waitForNetworkIdle,
     waitForSelector,
     waitForText,
