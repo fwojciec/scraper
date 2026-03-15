@@ -479,10 +479,10 @@ async function postAction(
   warn?: (msg: string) => void,
 ): Promise<ActionResult> {
   const timedOut = await page.waitForNetworkIdle();
+  if (timedOut && warn) {
+    warn("warning: network idle timed out — page may still be loading\n");
+  }
   if (opts?.includeSnapshot) {
-    if (timedOut && warn) {
-      warn("warning: network idle timed out — snapshot may reflect incomplete page state\n");
-    }
     const snapshot = await doSnapshot(page);
     return { snapshot };
   }

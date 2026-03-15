@@ -26,6 +26,8 @@ export function createNetworkTracker(
   const staleCheckMs = Math.min(Math.ceil(staleMs / 2), MAX_STALE_CHECK_INTERVAL_MS);
   const inflight = new Map<string, number>();
   const changeCallbacks = new Set<() => void>();
+  const pendingDone = new Set<(timedOut: boolean) => void>();
+  let disposed = false;
 
   function notifyChange() {
     for (const cb of changeCallbacks) cb();
@@ -67,6 +69,7 @@ export function createNetworkTracker(
   cdp.Network.addEventListener("loadingFailed", onTerminal);
 
   function waitForNetworkIdle(graceMs = 500, timeoutMs = 5000): Promise<boolean> {
+    if (disposed) return Promise.resolve(true);
     return new Promise((resolve) => {
       let graceTimer: number | undefined;
 
@@ -75,6 +78,8 @@ export function createNetworkTracker(
       }, timeoutMs);
 
       function done(timedOut: boolean) {
+        if (!pendingDone.has(done)) return; // already settled
+        pendingDone.delete(done);
         if (graceTimer !== undefined) clearTimeout(graceTimer);
         clearTimeout(deadlineTimer);
         changeCallbacks.delete(onChange);
@@ -98,6 +103,7 @@ export function createNetworkTracker(
         }
       }
 
+      pendingDone.add(done);
       changeCallbacks.add(onChange);
 
       // Check immediately — may already be idle
@@ -109,10 +115,13 @@ export function createNetworkTracker(
   }
 
   function cleanup() {
+    disposed = true;
     clearInterval(staleTimer);
     cdp.Network.removeEventListener("requestWillBeSent", onRequest);
     cdp.Network.removeEventListener("loadingFinished", onTerminal);
     cdp.Network.removeEventListener("loadingFailed", onTerminal);
+    // Settle any pending waitForNetworkIdle promises immediately
+    for (const done of pendingDone) done(true);
     changeCallbacks.clear();
   }
 
