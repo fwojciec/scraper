@@ -437,7 +437,8 @@ async function selectPage(targetId: string): Promise<void> {
       throw new Error(`no page with targetId '${targetId}' — run 'scraper pages' to list tabs`);
     }
 
-    // Update state with new targetId (single read, no race)
+    // Update state with new targetId — safe for single-user CLI; concurrent
+    // processes sharing the same state file could overwrite each other.
     await stateStore.write({ ...state, targetId });
     // Old refs are meaningless for the new page
     await refsStore.remove();
@@ -475,6 +476,8 @@ async function postAction(
   const timedOut = await page.waitForNetworkIdle();
   if (opts?.includeSnapshot) {
     if (timedOut) {
+      // console.error is intentional: postAction runs in the composition root,
+      // outside the CliDeps boundary, so there is no injected stderr.
       console.error("warning: network idle timed out — snapshot may reflect incomplete page state");
     }
     const snapshot = await doSnapshot(page);
@@ -566,7 +569,10 @@ const deps: CliDeps = {
           return await postAction(page, opts);
         }
         // Navigation without --snapshot: wait for network idle, then invalidate refs
-        await page.waitForNetworkIdle();
+        const timedOut = await page.waitForNetworkIdle();
+        if (timedOut) {
+          console.error("warning: network idle timed out after navigation");
+        }
         await refsStore.remove();
         return {};
       });
