@@ -519,6 +519,41 @@ const deps: CliDeps = {
       return await postAction(page, opts);
     });
   },
+  type(target: ElementTarget, text: string, opts?: ActionOptions) {
+    return withPageConnection(async (page) => {
+      const refs = await refsStore.read();
+      const objectId = await resolveTarget(target, page, refs);
+      await page.typeText(objectId, text);
+      return await postAction(page, opts);
+    });
+  },
+  selectOption(target: ElementTarget, value: string, opts?: ActionOptions) {
+    return withPageConnection(async (page) => {
+      const refs = await refsStore.read();
+      const objectId = await resolveTarget(target, page, refs);
+      await page.selectOption(objectId, value);
+      return await postAction(page, opts);
+    });
+  },
+  submit(target: ElementTarget, opts?: ActionOptions) {
+    return withPageConnection(async (page) => {
+      const refs = await refsStore.read();
+      const objectId = await resolveTarget(target, page, refs);
+      await page.submitForm(objectId);
+      return await postAction(page, opts);
+    });
+  },
+  pressKey(key: string, target?: ElementTarget, opts?: ActionOptions) {
+    return withPageConnection(async (page) => {
+      if (target) {
+        const refs = await refsStore.read();
+        const objectId = await resolveTarget(target, page, refs);
+        await page.focusElement(objectId);
+      }
+      await page.pressKey(key);
+      return await postAction(page, opts);
+    });
+  },
   wait(opts: WaitOptions) {
     return withPageConnection(async (page) => {
       const timeoutMs = opts.timeoutMs;

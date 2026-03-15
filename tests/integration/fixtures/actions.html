@@ -13,16 +13,48 @@
       <label for="email-input">Email:</label>
       <input type="email" id="email-input" name="email" />
 
+      <label for="color-select">Color:</label>
+      <select id="color-select" name="color">
+        <option value="">Choose...</option>
+        <option value="red">Red</option>
+        <option value="green">Green</option>
+        <option value="blue">Blue</option>
+      </select>
+
       <button type="button" id="greet-btn">Greet</button>
+      <button type="submit" id="submit-btn">Submit</button>
     </form>
 
     <div id="output"></div>
+    <div id="typed-output"></div>
+    <div id="submit-output"></div>
+    <div id="keypress-output"></div>
 
     <script>
       document.getElementById("greet-btn").addEventListener("click", () => {
         const name = document.getElementById("name-input").value;
         const output = document.getElementById("output");
         output.textContent = name ? `Hello, ${name}!` : "Please enter a name.";
+      });
+
+      // Track keydown events on name input for type/press-key testing
+      document.getElementById("name-input").addEventListener("keydown", (e) => {
+        document.getElementById("keypress-output").textContent = "keydown:" + e.key;
+      });
+
+      // Track input events for type testing
+      document.getElementById("name-input").addEventListener("input", () => {
+        document.getElementById("typed-output").textContent = "typed:" +
+          document.getElementById("name-input").value;
+      });
+
+      // Track form submission
+      document.getElementById("test-form").addEventListener("submit", (e) => {
+        e.preventDefault();
+        const name = document.getElementById("name-input").value;
+        const color = document.getElementById("color-select").value;
+        document.getElementById("submit-output").textContent =
+          `submitted: name=${name}, color=${color}`;
       });
     </script>
   </body>

@@ -246,6 +246,142 @@ Deno.test("actions: click --ref uses persisted refs.json across processes", asyn
   }
 });
 
+Deno.test("actions: type, select, submit, press-key", async () => {
+  const tmpHome = await Deno.makeTempDir();
+  const fixtures = startFixtureServer();
+  const env = { ...Deno.env.toObject(), HOME: tmpHome, DENO_DIR: await denoDir() };
+
+  try {
+    // Start Chrome
+    const start = await runScraper(["start"], env);
+    assertEquals(start.code, 0, `start failed: ${start.stderr}`);
+
+    // Navigate to actions fixture
+    const nav = await runScraper(
+      ["navigate", fixtures.url("actions.html")],
+      env,
+    );
+    assertEquals(nav.code, 0, `navigate failed: ${nav.stderr}`);
+
+    // --- type: types text character by character ---
+    const typeResult = await runScraper(
+      ["type", "--selector", "#name-input", "Alice"],
+      env,
+    );
+    assertEquals(typeResult.code, 0, `type failed: ${typeResult.stderr}`);
+    assertStringIncludes(typeResult.stdout, "typed into");
+
+    // Verify the input value was set via typing
+    const typedValue = await runScraper(
+      ["eval", "document.getElementById('name-input').value"],
+      env,
+    );
+    assertEquals(typedValue.code, 0, `eval typed value failed: ${typedValue.stderr}`);
+    assertStringIncludes(typedValue.stdout, "Alice");
+
+    // Verify input event fired (tracked by typed-output div)
+    const typedOutput = await runScraper(
+      ["eval", "document.getElementById('typed-output').textContent"],
+      env,
+    );
+    assertEquals(typedOutput.code, 0);
+    assertStringIncludes(typedOutput.stdout, "typed:Alice");
+
+    // --- select: selects a dropdown option ---
+    const selectResult = await runScraper(
+      ["select", "--selector", "#color-select", "blue"],
+      env,
+    );
+    assertEquals(selectResult.code, 0, `select failed: ${selectResult.stderr}`);
+    assertStringIncludes(selectResult.stdout, "selected");
+
+    // Verify the select value
+    const selectValue = await runScraper(
+      ["eval", "document.getElementById('color-select').value"],
+      env,
+    );
+    assertEquals(selectValue.code, 0);
+    assertStringIncludes(selectValue.stdout, "blue");
+
+    // --- submit: submits the form ---
+    const submitResult = await runScraper(
+      ["submit", "--selector", "#test-form"],
+      env,
+    );
+    assertEquals(submitResult.code, 0, `submit failed: ${submitResult.stderr}`);
+    assertStringIncludes(submitResult.stdout, "submitted");
+
+    // Verify the form was submitted (tracked by submit-output div)
+    const submitOutput = await runScraper(
+      ["eval", "document.getElementById('submit-output').textContent"],
+      env,
+    );
+    assertEquals(submitOutput.code, 0);
+    assertStringIncludes(submitOutput.stdout, "submitted: name=Alice, color=blue");
+
+    // --- press-key: dispatches a key event ---
+    // Clear the name input first
+    await runScraper(["fill", "--selector", "#name-input", ""], env);
+
+    // Type something then press Enter to verify keydown events
+    await runScraper(["type", "--selector", "#name-input", "Bob"], env);
+
+    const pressResult = await runScraper(
+      ["press-key", "Enter", "--selector", "#name-input"],
+      env,
+    );
+    assertEquals(pressResult.code, 0, `press-key failed: ${pressResult.stderr}`);
+    assertStringIncludes(pressResult.stdout, "pressed Enter");
+
+    // Verify keydown event was captured
+    const keypressOutput = await runScraper(
+      ["eval", "document.getElementById('keypress-output').textContent"],
+      env,
+    );
+    assertEquals(keypressOutput.code, 0);
+    assertStringIncludes(keypressOutput.stdout, "keydown:Enter");
+
+    // --- type --snapshot ---
+    const typeSnap = await runScraper(
+      ["type", "--selector", "#name-input", "X", "--snapshot"],
+      env,
+    );
+    assertEquals(typeSnap.code, 0, `type --snapshot failed: ${typeSnap.stderr}`);
+    assertStringIncludes(typeSnap.stderr, "typed into");
+    assert(typeSnap.stdout.includes("textbox"), "snapshot YAML should be on stdout");
+
+    // --- select with invalid value ---
+    const selectBad = await runScraper(
+      ["select", "--selector", "#color-select", "purple"],
+      env,
+    );
+    assertEquals(selectBad.code, 1, "select with invalid value should fail");
+    assertStringIncludes(selectBad.stderr, "no option with value");
+
+    // --- submit without form ---
+    const submitNoForm = await runScraper(
+      ["submit", "--selector", "h1"],
+      env,
+    );
+    assertEquals(submitNoForm.code, 1, "submit on non-form element should fail");
+    assertStringIncludes(submitNoForm.stderr, "no form found");
+
+    // Stop
+    const stop = await runScraper(["stop"], env);
+    assertEquals(stop.code, 0, `stop failed: ${stop.stderr}`);
+  } finally {
+    try {
+      const stateText = await Deno.readTextFile(`${tmpHome}/.scraper/chrome.json`);
+      const state = JSON.parse(stateText);
+      if (state.chromePid) Deno.kill(state.chromePid, "SIGTERM");
+    } catch { /* state may not exist or Chrome may be dead */ }
+    await fixtures.close();
+    try {
+      await Deno.remove(tmpHome, { recursive: true });
+    } catch { /* best effort */ }
+  }
+});
+
 Deno.test("actions: wait --timeout times out with clear error", async () => {
   const tmpHome = await Deno.makeTempDir();
   const fixtures = startFixtureServer();

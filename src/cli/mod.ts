@@ -37,6 +37,10 @@ export interface CliDeps {
   click(target: ElementTarget, opts?: ActionOptions): Promise<ActionResult>;
   fill(target: ElementTarget, value: string, opts?: ActionOptions): Promise<ActionResult>;
   wait(opts: WaitOptions): Promise<void>;
+  type(target: ElementTarget, text: string, opts?: ActionOptions): Promise<ActionResult>;
+  selectOption(target: ElementTarget, value: string, opts?: ActionOptions): Promise<ActionResult>;
+  submit(target: ElementTarget, opts?: ActionOptions): Promise<ActionResult>;
+  pressKey(key: string, target?: ElementTarget, opts?: ActionOptions): Promise<ActionResult>;
   stdout(s: string): void;
   stderr(s: string): void;
 }
@@ -54,6 +58,10 @@ Commands:
   page        Switch active tab
   click       Click an element
   fill        Fill an input element
+  type        Type text character by character
+  select      Select a dropdown option
+  submit      Submit a form
+  press-key   Press a keyboard key
   wait        Wait for a condition
 `;
 
@@ -404,6 +412,142 @@ async function handleWait(args: string[], deps: CliDeps): Promise<number> {
   }
 }
 
+async function handleType(args: string[], deps: CliDeps): Promise<number> {
+  const { positional, flags } = parseFlags(args);
+  const [target, targetErr] = parseTarget(flags);
+  if (targetErr) {
+    deps.stderr(
+      `error: ${targetErr}\nUsage: scraper type --ref <ref> | --selector <css> <text>\n`,
+    );
+    return 1;
+  }
+
+  const text = positional[0];
+  if (text === undefined) {
+    deps.stderr("error: text is required\nUsage: scraper type --ref <ref> <text>\n");
+    return 1;
+  }
+
+  const includeSnapshot = flagBoolean(flags, "snapshot");
+
+  try {
+    const result = await deps.type(target!, text, { includeSnapshot });
+    const label = "ref" in target! ? `ref ${target!.ref}` : `selector "${target!.selector}"`;
+    if (result.snapshot) {
+      outputActionResult(result, `typed into ${label}`, deps);
+    } else {
+      deps.stdout(`typed into ${label}\n`);
+    }
+    return 0;
+  } catch (err) {
+    deps.stderr(`error: ${err instanceof Error ? err.message : err}\n`);
+    return 1;
+  }
+}
+
+async function handleSelect(args: string[], deps: CliDeps): Promise<number> {
+  const { positional, flags } = parseFlags(args);
+  const [target, targetErr] = parseTarget(flags);
+  if (targetErr) {
+    deps.stderr(
+      `error: ${targetErr}\nUsage: scraper select --ref <ref> | --selector <css> <value>\n`,
+    );
+    return 1;
+  }
+
+  const value = positional[0];
+  if (value === undefined) {
+    deps.stderr("error: value is required\nUsage: scraper select --ref <ref> <value>\n");
+    return 1;
+  }
+
+  const includeSnapshot = flagBoolean(flags, "snapshot");
+
+  try {
+    const result = await deps.selectOption(target!, value, { includeSnapshot });
+    const label = "ref" in target! ? `ref ${target!.ref}` : `selector "${target!.selector}"`;
+    if (result.snapshot) {
+      outputActionResult(result, `selected "${value}" in ${label}`, deps);
+    } else {
+      deps.stdout(`selected "${value}" in ${label}\n`);
+    }
+    return 0;
+  } catch (err) {
+    deps.stderr(`error: ${err instanceof Error ? err.message : err}\n`);
+    return 1;
+  }
+}
+
+async function handleSubmit(args: string[], deps: CliDeps): Promise<number> {
+  const { flags } = parseFlags(args);
+  const [target, targetErr] = parseTarget(flags);
+  if (targetErr) {
+    deps.stderr(
+      `error: ${targetErr}\nUsage: scraper submit --ref <ref> | --selector <css>\n`,
+    );
+    return 1;
+  }
+
+  const includeSnapshot = flagBoolean(flags, "snapshot");
+
+  try {
+    const result = await deps.submit(target!, { includeSnapshot });
+    const label = "ref" in target! ? `ref ${target!.ref}` : `selector "${target!.selector}"`;
+    if (result.snapshot) {
+      outputActionResult(result, `submitted ${label}`, deps);
+    } else {
+      deps.stdout(`submitted ${label}\n`);
+    }
+    return 0;
+  } catch (err) {
+    deps.stderr(`error: ${err instanceof Error ? err.message : err}\n`);
+    return 1;
+  }
+}
+
+async function handlePressKey(args: string[], deps: CliDeps): Promise<number> {
+  const { positional, flags } = parseFlags(args);
+  const key = positional[0];
+  if (!key) {
+    deps.stderr(
+      "error: key is required\nUsage: scraper press-key <key> [--ref <ref> | --selector <css>]\n",
+    );
+    return 1;
+  }
+
+  const ref = flagString(flags, "ref");
+  const selector = flagString(flags, "selector");
+
+  if (ref && selector) {
+    deps.stderr("error: provide either --ref or --selector, not both\n");
+    return 1;
+  }
+
+  const target: ElementTarget | undefined = ref ? { ref } : selector ? { selector } : undefined;
+
+  const includeSnapshot = flagBoolean(flags, "snapshot");
+
+  try {
+    const result = await deps.pressKey(key, target, { includeSnapshot });
+    let statusLine: string;
+    if (target) {
+      const label = "ref" in target ? `ref ${target.ref}` : `selector "${target.selector}"`;
+      statusLine = `pressed ${key} on ${label}`;
+    } else {
+      statusLine = `pressed ${key}`;
+    }
+    if (result.snapshot) {
+      outputActionResult(result, statusLine, deps);
+    } else {
+      deps.stdout(statusLine + "\n");
+    }
+    return 0;
+  } catch (err) {
+    deps.stderr(`error: ${err instanceof Error ? err.message : err}\n`);
+    return 1;
+  }
+}
+
 /** Run the CLI with the given arguments and dependencies. Returns exit code. */
 export function runCli(args: string[], deps: CliDeps): Promise<number> {
   const [command, ...rest] = args;
@@ -434,6 +578,14 @@ export function runCli(args: string[], deps: CliDeps): Promise<number> {
       return handleClick(rest, deps);
     case "fill":
       return handleFill(rest, deps);
+    case "type":
+      return handleType(rest, deps);
+    case "select":
+      return handleSelect(rest, deps);
+    case "submit":
+      return handleSubmit(rest, deps);
+    case "press-key":
+      return handlePressKey(rest, deps);
     case "wait":
       return handleWait(rest, deps);
     default:

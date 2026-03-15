@@ -18,6 +18,16 @@ export interface CdpPageService extends BrowserService {
   clickElement(objectId: string): Promise<void>;
   /** Fill an input element: focus, clear, set value, dispatch input+change. */
   fillElement(objectId: string, value: string): Promise<void>;
+  /** Type text character by character: focus, then dispatch key events. */
+  typeText(objectId: string, text: string): Promise<void>;
+  /** Select a dropdown option: set value and dispatch input+change. */
+  selectOption(objectId: string, value: string): Promise<void>;
+  /** Submit the form containing the element (or the element itself if it's a form). */
+  submitForm(objectId: string): Promise<void>;
+  /** Focus the element. */
+  focusElement(objectId: string): Promise<void>;
+  /** Press a keyboard key (dispatched to the focused element). */
+  pressKey(key: string): Promise<void>;
   /** Wait for network idle: 0 in-flight requests for graceMs, up to timeoutMs. */
   waitForNetworkIdle(graceMs?: number, timeoutMs?: number): Promise<void>;
   /** Wait for an element matching selector to exist in the DOM. */
@@ -353,6 +363,118 @@ export async function createPageConnection(
     );
   }
 
+  /** Type text character by character: focus, then dispatch key events. */
+  async function typeText(objectId: string, text: string): Promise<void> {
+    await focusElement(objectId);
+
+    // Type each character via key events
+    for (const char of text) {
+      await cdp.Input.dispatchKeyEvent(
+        { type: "keyDown", text: char },
+        sessionId,
+      );
+      await cdp.Input.dispatchKeyEvent(
+        { type: "keyUp" },
+        sessionId,
+      );
+    }
+  }
+
+  /** Select a dropdown option: set value and dispatch input+change. */
+  async function selectOption(objectId: string, value: string): Promise<void> {
+    const result = await cdp.Runtime.callFunctionOn(
+      {
+        objectId,
+        functionDeclaration: `function(val) {
+          if (this.tagName !== 'SELECT') throw new Error('element is not a <select>');
+          const option = Array.from(this.options).find(o => o.value === val);
+          if (!option) throw new Error('no option with value "' + val + '"');
+          this.value = val;
+          this.dispatchEvent(new Event('input', { bubbles: true }));
+          this.dispatchEvent(new Event('change', { bubbles: true }));
+        }`,
+        arguments: [{ value }],
+        awaitPromise: false,
+        returnByValue: true,
+      },
+      sessionId,
+    );
+    if (result.exceptionDetails) {
+      const msg = result.exceptionDetails.exception?.description ??
+        result.exceptionDetails.text ??
+        "select failed";
+      throw new Error(msg);
+    }
+  }
+
+  /** Submit the form containing the element (or the element itself if it's a form). */
+  async function submitForm(objectId: string): Promise<void> {
+    const result = await cdp.Runtime.callFunctionOn(
+      {
+        objectId,
+        functionDeclaration: `function() {
+          const form = this.tagName === 'FORM' ? this : this.closest('form');
+          if (!form) throw new Error('no form found for this element');
+          form.requestSubmit();
+        }`,
+        awaitPromise: false,
+        returnByValue: true,
+      },
+      sessionId,
+    );
+    if (result.exceptionDetails) {
+      const msg = result.exceptionDetails.exception?.description ??
+        result.exceptionDetails.text ??
+        "submit failed";
+      throw new Error(msg);
+    }
+  }
+
+  /** Focus the element. */
+  async function focusElement(objectId: string): Promise<void> {
+    const result = await cdp.Runtime.callFunctionOn(
+      {
+        objectId,
+        functionDeclaration: "function() { this.focus(); }",
+        awaitPromise: false,
+        returnByValue: true,
+      },
+      sessionId,
+    );
+    if (result.exceptionDetails) {
+      const msg = result.exceptionDetails.exception?.description ??
+        result.exceptionDetails.text ??
+        "focus failed";
+      throw new Error(msg);
+    }
+  }
+
+  /** Press a keyboard key (dispatched to the focused element). */
+  async function pressKey(key: string): Promise<void> {
+    // Map well-known key names to their text representation
+    const textMap: Record<string, string> = {
+      Enter: "\r",
+      Space: " ",
+      Tab: "\t",
+    };
+    const text = textMap[key];
+
+    await cdp.Input.dispatchKeyEvent(
+      { type: "rawKeyDown", key, code: key, ...(text ? { text } : {}) },
+      sessionId,
+    );
+    if (text) {
+      await cdp.Input.dispatchKeyEvent(
+        { type: "char", key, code: key, text },
+        sessionId,
+      );
+    }
+    await cdp.Input.dispatchKeyEvent(
+      { type: "keyUp", key, code: key },
+      sessionId,
+    );
+  }
+
   /** Wait for network idle: 0 in-flight requests for graceMs, up to timeoutMs. */
   async function waitForNetworkIdle(
     graceMs = 500,
@@ -465,6 +587,11 @@ export async function createPageConnection(
     resolveUniqueSelector,
     clickElement,
     fillElement,
+    typeText,
+    selectOption,
+    submitForm,
+    focusElement,
+    pressKey,
     waitForNetworkIdle,
     waitForSelector,
     waitForText,
