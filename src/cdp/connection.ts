@@ -640,7 +640,8 @@ export async function createPageConnection(
     let idleSince = inflightRequests.size === 0 ? Date.now() : 0;
 
     while (Date.now() < deadline) {
-      // Evict stale requests that never received a terminal event
+      // Evict stale requests that never received a terminal event.
+      // Deleting during Map for...of iteration is safe per ES spec.
       const now = Date.now();
       for (const [id, startTime] of inflightRequests) {
         if (now - startTime >= STALE_REQUEST_MS) inflightRequests.delete(id);

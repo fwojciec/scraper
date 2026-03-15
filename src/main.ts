@@ -270,6 +270,8 @@ async function startAttach(channel?: string): Promise<StartResult> {
       ATTACH_TIMEOUT_MS,
     );
   });
+  // Prevent unhandled rejection if connectAndVerify settles first
+  timeoutPromise.catch(() => {});
 
   try {
     const connectAndVerify = async () => {
@@ -464,7 +466,9 @@ async function doSnapshot(
 ) {
   const snapshotSvc = snapshotServiceFor(page);
   const result = await snapshotSvc.snapshot(opts ?? {});
-  await refsStore.write(result.refs);
+  if (Object.keys(result.refs).length > 0) {
+    await refsStore.write(result.refs);
+  }
   return result;
 }
 
@@ -531,7 +535,7 @@ async function withDialogHandling<T>(
     if (dialogErrors.length) throw dialogErrors[0];
     return result;
   } catch (err) {
-    await Promise.all(handlePromises);
+    await Promise.all(handlePromises).catch(() => {});
     if (dialogErrors.length) {
       throw new AggregateError(
         [err, ...dialogErrors],
