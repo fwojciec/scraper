@@ -10,6 +10,22 @@ export interface CdpPageService extends BrowserService {
   // deno-lint-ignore no-explicit-any
   getFullAXTree(): Promise<any>;
   resolveSelector(selector: string): Promise<number>;
+  /** Resolve a backendNodeId to a RemoteObjectId. Throws if stale. */
+  resolveRef(backendNodeId: number, refName: string): Promise<string>;
+  /** Resolve CSS selector to a RemoteObjectId. Error on 0 or >1 matches. */
+  resolveUniqueSelector(selector: string): Promise<string>;
+  /** Click element at the given RemoteObjectId using real pointer events. */
+  clickElement(objectId: string): Promise<void>;
+  /** Fill an input element: focus, clear, set value, dispatch input+change. */
+  fillElement(objectId: string, value: string): Promise<void>;
+  /** Wait for network idle: 0 in-flight requests for graceMs, up to timeoutMs. */
+  waitForNetworkIdle(graceMs?: number, timeoutMs?: number): Promise<void>;
+  /** Wait for an element matching selector to exist in the DOM. */
+  waitForSelector(selector: string, timeoutMs?: number): Promise<void>;
+  /** Wait for text to appear on the page. */
+  waitForText(text: string, timeoutMs?: number): Promise<void>;
+  /** Wait for text within an element identified by objectId. */
+  waitForTextInElement(objectId: string, text: string, timeoutMs?: number): Promise<void>;
 }
 
 /** Browser-level CDP connection — not attached to any target. */
@@ -105,6 +121,25 @@ export async function createPageConnection(
   await cdp.Runtime.enable(null, sessionId);
   await cdp.Accessibility.enable(null, sessionId);
   await cdp.DOM.enable(null, sessionId);
+  await cdp.Network.enable(null, sessionId);
+
+  // --- Network idle tracker ---
+  // Track in-flight requests by requestId (Set) to handle redirects correctly:
+  // redirects fire multiple requestWillBeSent for the same requestId but only
+  // one terminal event (loadingFinished/loadingFailed).
+  const inflightRequests = new Set<string>();
+  // deno-lint-ignore no-explicit-any
+  cdp.Network.addEventListener("requestWillBeSent", (e: any) => {
+    if (e.sessionId === sessionId) inflightRequests.add(e.params.requestId);
+  });
+  // deno-lint-ignore no-explicit-any
+  cdp.Network.addEventListener("loadingFinished", (e: any) => {
+    if (e.sessionId === sessionId) inflightRequests.delete(e.params.requestId);
+  });
+  // deno-lint-ignore no-explicit-any
+  cdp.Network.addEventListener("loadingFailed", (e: any) => {
+    if (e.sessionId === sessionId) inflightRequests.delete(e.params.requestId);
+  });
 
   // deno-lint-ignore no-explicit-any
   async function waitForLoad(cdpClient: any, sid: string): Promise<void> {
@@ -212,6 +247,206 @@ export async function createPageConnection(
     return desc.node.backendNodeId;
   }
 
+  /** Resolve a backendNodeId to a RemoteObjectId. Throws if stale. */
+  async function resolveRef(backendNodeId: number, refName: string): Promise<string> {
+    try {
+      const result = await cdp.DOM.resolveNode(
+        { backendNodeId },
+        sessionId,
+      );
+      return result.object.objectId;
+    } catch {
+      throw new Error(
+        `ref ${refName} is stale — the element no longer exists. Run 'scraper snapshot' to get fresh refs`,
+      );
+    }
+  }
+
+  /** Resolve CSS selector to a RemoteObjectId. Error on 0 or >1 matches. */
+  async function resolveUniqueSelector(selector: string): Promise<string> {
+    const evalResult = await cdp.Runtime.evaluate(
+      {
+        expression: `document.querySelectorAll(${JSON.stringify(selector)}).length`,
+        returnByValue: true,
+      },
+      sessionId,
+    );
+
+    if (evalResult.exceptionDetails) {
+      const msg = evalResult.exceptionDetails.text ??
+        evalResult.exceptionDetails.exception?.description ??
+        "querySelectorAll failed";
+      throw new Error(msg);
+    }
+
+    const count = evalResult.result.value as number;
+    if (count === 0) {
+      throw new Error(`selector "${selector}" did not match any element`);
+    }
+    if (count > 1) {
+      throw new Error(
+        `selector "${selector}" matched ${count} elements, expected exactly 1`,
+      );
+    }
+
+    // Exactly 1 match — get its objectId
+    const singleResult = await cdp.Runtime.evaluate(
+      {
+        expression: `document.querySelector(${JSON.stringify(selector)})`,
+        returnByValue: false,
+      },
+      sessionId,
+    );
+
+    return singleResult.result.objectId;
+  }
+
+  /** Click element at the given RemoteObjectId using real pointer events. */
+  async function clickElement(objectId: string): Promise<void> {
+    // Get the element's content quads (coordinates)
+    const { quads } = await cdp.DOM.getContentQuads(
+      { objectId },
+      sessionId,
+    );
+
+    if (!quads || quads.length === 0) {
+      throw new Error("element has no visible area — cannot click");
+    }
+
+    // Compute center of the first quad (array of 8 floats: x1,y1,x2,y2,x3,y3,x4,y4)
+    const quad = quads[0];
+    const x = (quad[0] + quad[2] + quad[4] + quad[6]) / 4;
+    const y = (quad[1] + quad[3] + quad[5] + quad[7]) / 4;
+
+    // Dispatch mouse events: move, press, release
+    await cdp.Input.dispatchMouseEvent(
+      { type: "mouseMoved", x, y },
+      sessionId,
+    );
+    await cdp.Input.dispatchMouseEvent(
+      { type: "mousePressed", x, y, button: "left", clickCount: 1 },
+      sessionId,
+    );
+    await cdp.Input.dispatchMouseEvent(
+      { type: "mouseReleased", x, y, button: "left", clickCount: 1 },
+      sessionId,
+    );
+  }
+
+  /** Fill an input element: focus, clear, set value, dispatch input+change. */
+  async function fillElement(objectId: string, value: string): Promise<void> {
+    await cdp.Runtime.callFunctionOn(
+      {
+        objectId,
+        functionDeclaration: `function(newValue) {
+          this.focus();
+          this.value = '';
+          this.value = newValue;
+          this.dispatchEvent(new Event('input', { bubbles: true }));
+          this.dispatchEvent(new Event('change', { bubbles: true }));
+        }`,
+        arguments: [{ value }],
+        awaitPromise: false,
+        returnByValue: true,
+      },
+      sessionId,
+    );
+  }
+
+  /** Wait for network idle: 0 in-flight requests for graceMs, up to timeoutMs. */
+  async function waitForNetworkIdle(
+    graceMs = 500,
+    timeoutMs = 5000,
+  ): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    let idleSince = inflightRequests.size === 0 ? Date.now() : 0;
+
+    while (Date.now() < deadline) {
+      if (inflightRequests.size === 0) {
+        if (idleSince === 0) idleSince = Date.now();
+        if (Date.now() - idleSince >= graceMs) return;
+      } else {
+        idleSince = 0;
+      }
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    // Timeout is not an error — action succeeded, page may still be loading
+  }
+
+  /** Wait for an element matching selector to exist in the DOM. */
+  async function waitForSelector(
+    selector: string,
+    timeoutMs = 5000,
+  ): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    let delay = 100;
+
+    while (Date.now() < deadline) {
+      const result = await cdp.Runtime.evaluate(
+        {
+          expression: `document.querySelector(${JSON.stringify(selector)}) !== null`,
+          returnByValue: true,
+        },
+        sessionId,
+      );
+      if (result.result.value === true) return;
+      await new Promise((r) => setTimeout(r, Math.min(delay, deadline - Date.now())));
+      delay = Math.min(delay * 2, 1000);
+    }
+    throw new Error(`timed out waiting for selector "${selector}" (${timeoutMs}ms)`);
+  }
+
+  /** Wait for text to appear on the page. */
+  async function waitForText(
+    text: string,
+    timeoutMs = 5000,
+  ): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    let delay = 100;
+
+    while (Date.now() < deadline) {
+      const result = await cdp.Runtime.evaluate(
+        {
+          expression: `(document.body?.innerText ?? '').includes(${JSON.stringify(text)})`,
+          returnByValue: true,
+        },
+        sessionId,
+      );
+      if (result.result.value === true) return;
+      await new Promise((r) => setTimeout(r, Math.min(delay, deadline - Date.now())));
+      delay = Math.min(delay * 2, 1000);
+    }
+    throw new Error(`timed out waiting for text "${text}" (${timeoutMs}ms)`);
+  }
+
+  /** Wait for text within an element identified by objectId. */
+  async function waitForTextInElement(
+    objectId: string,
+    text: string,
+    timeoutMs = 5000,
+  ): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    let delay = 100;
+
+    while (Date.now() < deadline) {
+      const result = await cdp.Runtime.callFunctionOn(
+        {
+          objectId,
+          functionDeclaration: `function(searchText) {
+            return (this.innerText ?? '').includes(searchText);
+          }`,
+          arguments: [{ value: text }],
+          returnByValue: true,
+        },
+        sessionId,
+      );
+      if (result.result.value === true) return;
+      await new Promise((r) => setTimeout(r, Math.min(delay, deadline - Date.now())));
+      delay = Math.min(delay * 2, 1000);
+    }
+    throw new Error(`timed out waiting for text "${text}" in element (${timeoutMs}ms)`);
+  }
+
   function close(): void {
     try {
       cdp.connection?.close();
@@ -220,5 +455,20 @@ export async function createPageConnection(
     }
   }
 
-  return { navigate, evaluate, screenshot, getFullAXTree, resolveSelector, close };
+  return {
+    navigate,
+    evaluate,
+    screenshot,
+    getFullAXTree,
+    resolveSelector,
+    resolveRef,
+    resolveUniqueSelector,
+    clickElement,
+    fillElement,
+    waitForNetworkIdle,
+    waitForSelector,
+    waitForText,
+    waitForTextInElement,
+    close,
+  };
 }

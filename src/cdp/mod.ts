@@ -9,3 +9,4 @@ export {
   discoverWsUrl,
 } from "./connection.ts";
 export { defaultUserDataDir, readDevToolsActivePort } from "./attach.ts";
+export { resolveTarget } from "./resolve.ts";

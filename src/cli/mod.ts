@@ -1,6 +1,14 @@
 // Adapter: CLI (Deno.args). Direct CDP operations, no HTTP server.
 
-import type { PageInfo, SnapshotOptions, SnapshotResult } from "../domain/mod.ts";
+import type {
+  ActionOptions,
+  ActionResult,
+  ElementTarget,
+  PageInfo,
+  SnapshotOptions,
+  SnapshotResult,
+  WaitOptions,
+} from "../domain/mod.ts";
 
 /** Result of starting Chrome. */
 export interface StartResult {
@@ -20,12 +28,15 @@ export interface StartOptions {
 export interface CliDeps {
   startChrome(opts: StartOptions): Promise<StartResult>;
   stopChrome(): Promise<void>;
-  navigate(url: string): Promise<void>;
+  navigate(url: string, opts?: ActionOptions): Promise<ActionResult>;
   snapshot(opts: SnapshotOptions): Promise<SnapshotResult>;
   evaluate(expression: string): Promise<{ result: unknown }>;
   screenshot(fullPage?: boolean): Promise<string>;
   listPages(): Promise<PageInfo[]>;
   selectPage(targetId: string): Promise<void>;
+  click(target: ElementTarget, opts?: ActionOptions): Promise<ActionResult>;
+  fill(target: ElementTarget, value: string, opts?: ActionOptions): Promise<ActionResult>;
+  wait(opts: WaitOptions): Promise<void>;
   stdout(s: string): void;
   stderr(s: string): void;
 }
@@ -41,6 +52,9 @@ Commands:
   screenshot  Capture a screenshot
   pages       List open tabs
   page        Switch active tab
+  click       Click an element
+  fill        Fill an input element
+  wait        Wait for a condition
 `;
 
 function parseFlags(
@@ -92,6 +106,33 @@ function flagBoolean(flags: Record<string, string | true>, key: string): boolean
   return flags[key] === true;
 }
 
+/** Parse --ref or --selector from flags. Returns [target, error]. */
+function parseTarget(
+  flags: Record<string, string | true>,
+): [ElementTarget | undefined, string | undefined] {
+  const ref = flagString(flags, "ref");
+  const selector = flagString(flags, "selector");
+
+  if (ref && selector) {
+    return [undefined, "provide either --ref or --selector, not both"];
+  }
+  if (ref) return [{ ref }, undefined];
+  if (selector) return [{ selector }, undefined];
+  return [undefined, "either --ref or --selector is required"];
+}
+
+/** Output an ActionResult: status to stderr, snapshot YAML to stdout. */
+function outputActionResult(
+  result: ActionResult,
+  statusLine: string,
+  deps: CliDeps,
+): void {
+  deps.stderr(statusLine + "\n");
+  if (result.snapshot) {
+    deps.stdout(result.snapshot.yaml);
+  }
+}
+
 async function handleStart(args: string[], deps: CliDeps): Promise<number> {
   const { flags } = parseFlags(args);
   const chromePath = flagString(flags, "chrome-path");
@@ -136,16 +177,22 @@ async function handleStop(deps: CliDeps): Promise<number> {
 }
 
 async function handleNavigate(args: string[], deps: CliDeps): Promise<number> {
-  const { positional } = parseFlags(args);
+  const { positional, flags } = parseFlags(args);
   const url = positional[0];
   if (!url) {
     deps.stderr("error: url is required\nUsage: scraper navigate <url>\n");
     return 1;
   }
 
+  const includeSnapshot = flagBoolean(flags, "snapshot");
+
   try {
-    await deps.navigate(url);
-    deps.stdout(`navigated to ${url}\n`);
+    const result = await deps.navigate(url, { includeSnapshot });
+    if (result.snapshot) {
+      outputActionResult(result, `navigated to ${url}`, deps);
+    } else {
+      deps.stdout(`navigated to ${url}\n`);
+    }
     return 0;
   } catch (err) {
     deps.stderr(`error: ${err instanceof Error ? err.message : err}\n`);
@@ -245,6 +292,118 @@ async function handlePage(args: string[], deps: CliDeps): Promise<number> {
   }
 }
 
+async function handleClick(args: string[], deps: CliDeps): Promise<number> {
+  const { flags } = parseFlags(args);
+  const [target, targetErr] = parseTarget(flags);
+  if (targetErr) {
+    deps.stderr(`error: ${targetErr}\nUsage: scraper click --ref <ref> | --selector <css>\n`);
+    return 1;
+  }
+
+  const includeSnapshot = flagBoolean(flags, "snapshot");
+
+  try {
+    const result = await deps.click(target!, { includeSnapshot });
+    const label = "ref" in target! ? `ref ${target!.ref}` : `selector "${target!.selector}"`;
+    if (result.snapshot) {
+      outputActionResult(result, `clicked ${label}`, deps);
+    } else {
+      deps.stdout(`clicked ${label}\n`);
+    }
+    return 0;
+  } catch (err) {
+    deps.stderr(`error: ${err instanceof Error ? err.message : err}\n`);
+    return 1;
+  }
+}
+
+async function handleFill(args: string[], deps: CliDeps): Promise<number> {
+  const { positional, flags } = parseFlags(args);
+  const [target, targetErr] = parseTarget(flags);
+  if (targetErr) {
+    deps.stderr(
+      `error: ${targetErr}\nUsage: scraper fill --ref <ref> | --selector <css> <value>\n`,
+    );
+    return 1;
+  }
+
+  const value = positional[0];
+  if (value === undefined) {
+    deps.stderr("error: value is required\nUsage: scraper fill --ref <ref> <value>\n");
+    return 1;
+  }
+
+  const includeSnapshot = flagBoolean(flags, "snapshot");
+
+  try {
+    const result = await deps.fill(target!, value, { includeSnapshot });
+    const label = "ref" in target! ? `ref ${target!.ref}` : `selector "${target!.selector}"`;
+    if (result.snapshot) {
+      outputActionResult(result, `filled ${label}`, deps);
+    } else {
+      deps.stdout(`filled ${label}\n`);
+    }
+    return 0;
+  } catch (err) {
+    deps.stderr(`error: ${err instanceof Error ? err.message : err}\n`);
+    return 1;
+  }
+}
+
+async function handleWait(args: string[], deps: CliDeps): Promise<number> {
+  const { flags } = parseFlags(args);
+
+  const ref = flagString(flags, "ref");
+  const selector = flagString(flags, "selector");
+  const text = flagString(flags, "text");
+  const [timeoutMs, timeoutErr] = flagNumber(flags, "timeout");
+  if (timeoutErr) {
+    deps.stderr(`error: ${timeoutErr}\n`);
+    return 1;
+  }
+
+  // Validate combinations
+  if (!ref && !selector && !text) {
+    deps.stderr(
+      "error: at least one of --selector, --text, or --ref --text is required\n" +
+        "Usage: scraper wait --selector <css> | --text '<text>' | --ref <ref> --text '<text>'\n",
+    );
+    return 1;
+  }
+
+  if (ref && selector) {
+    deps.stderr("error: provide either --ref or --selector, not both\n");
+    return 1;
+  }
+
+  if (ref && !text) {
+    deps.stderr("error: --ref requires --text (a ref names an existing element)\n");
+    return 1;
+  }
+
+  const target: import("../domain/mod.ts").ElementTarget | undefined = ref
+    ? { ref }
+    : selector
+    ? { selector }
+    : undefined;
+
+  try {
+    await deps.wait({ target, text, timeoutMs });
+    if (text && target) {
+      const label = "ref" in target ? `ref ${target.ref}` : `selector "${target.selector}"`;
+      deps.stdout(`found text "${text}" in ${label}\n`);
+    } else if (text) {
+      deps.stdout(`found text "${text}"\n`);
+    } else if (target && "selector" in target) {
+      deps.stdout(`found element matching "${target.selector}"\n`);
+    }
+    return 0;
+  } catch (err) {
+    deps.stderr(`error: ${err instanceof Error ? err.message : err}\n`);
+    return 1;
+  }
+}
+
 /** Run the CLI with the given arguments and dependencies. Returns exit code. */
 export function runCli(args: string[], deps: CliDeps): Promise<number> {
   const [command, ...rest] = args;
@@ -271,6 +430,12 @@ export function runCli(args: string[], deps: CliDeps): Promise<number> {
       return handlePages(deps);
     case "page":
       return handlePage(rest, deps);
+    case "click":
+      return handleClick(rest, deps);
+    case "fill":
+      return handleFill(rest, deps);
+    case "wait":
+      return handleWait(rest, deps);
     default:
       deps.stderr(`error: unknown command '${command}'\n${USAGE}`);
       return Promise.resolve(1);

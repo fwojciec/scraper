@@ -12,10 +12,18 @@ import {
   discoverWsUrl,
   launchChrome,
   readDevToolsActivePort,
+  resolveTarget,
 } from "./cdp/mod.ts";
 import { type AXNode, createSnapshotService } from "./aria/mod.ts";
 import { createJsonFileStore } from "./fs/mod.ts";
-import type { PageInfo, RefMap } from "./domain/mod.ts";
+import type {
+  ActionOptions,
+  ActionResult,
+  ElementTarget,
+  PageInfo,
+  RefMap,
+  WaitOptions,
+} from "./domain/mod.ts";
 
 const HOME = Deno.env.get("HOME");
 if (!HOME) throw new Error("HOME environment variable is not set");
@@ -439,39 +447,96 @@ async function selectPage(targetId: string): Promise<void> {
   await refsStore.remove();
 }
 
+/** Run snapshot pipeline and persist refs. */
+async function doSnapshot(
+  page: CdpPageService,
+  opts?: { maxDepth?: number; maxNodes?: number; selector?: string },
+) {
+  const snapshotSvc = createSnapshotService({
+    async getFullAXTree() {
+      return await page.getFullAXTree() as AXNode[];
+    },
+    async resolveSelector(selector: string) {
+      return await page.resolveSelector(selector);
+    },
+  });
+  const result = await snapshotSvc.snapshot(opts ?? {});
+  await refsStore.write(result.refs);
+  return result;
+}
+
+/** Execute post-action pipeline: network idle wait + optional snapshot. */
+async function postAction(
+  page: CdpPageService,
+  opts?: ActionOptions,
+): Promise<ActionResult> {
+  await page.waitForNetworkIdle();
+  if (opts?.includeSnapshot) {
+    const snapshot = await doSnapshot(page);
+    return { snapshot };
+  }
+  return {};
+}
+
 const deps: CliDeps = {
   startChrome,
   stopChrome,
-  navigate(url: string): Promise<void> {
-    return withPageConnection(async (browser) => {
-      await browser.navigate(url);
-      // Navigation invalidates refs
+  navigate(url: string, opts?: ActionOptions) {
+    return withPageConnection(async (page) => {
+      await page.navigate(url);
+      if (opts?.includeSnapshot) {
+        return await postAction(page, opts);
+      }
+      // Navigation without --snapshot invalidates refs
       await refsStore.remove();
+      return {};
     });
   },
   snapshot(opts) {
-    return withPageConnection(async (browser) => {
-      const snapshotSvc = createSnapshotService({
-        async getFullAXTree() {
-          return await browser.getFullAXTree() as AXNode[];
-        },
-        async resolveSelector(selector: string) {
-          return await browser.resolveSelector(selector);
-        },
-      });
-      const result = await snapshotSvc.snapshot(opts);
-      await refsStore.write(result.refs);
-      return result;
-    });
+    return withPageConnection((page) => doSnapshot(page, opts));
   },
   evaluate(expression: string) {
-    return withPageConnection((browser) => browser.evaluate(expression));
+    return withPageConnection((page) => page.evaluate(expression));
   },
   screenshot(fullPage?: boolean) {
-    return withPageConnection((browser) => browser.screenshot(fullPage));
+    return withPageConnection((page) => page.screenshot(fullPage));
   },
   listPages,
   selectPage,
+  click(target: ElementTarget, opts?: ActionOptions) {
+    return withPageConnection(async (page) => {
+      const refs = await refsStore.read();
+      const objectId = await resolveTarget(target, page, refs);
+      await page.clickElement(objectId);
+      return await postAction(page, opts);
+    });
+  },
+  fill(target: ElementTarget, value: string, opts?: ActionOptions) {
+    return withPageConnection(async (page) => {
+      const refs = await refsStore.read();
+      const objectId = await resolveTarget(target, page, refs);
+      await page.fillElement(objectId, value);
+      return await postAction(page, opts);
+    });
+  },
+  wait(opts: WaitOptions) {
+    return withPageConnection(async (page) => {
+      const timeoutMs = opts.timeoutMs;
+
+      if (opts.target && opts.text) {
+        // Wait for text within element
+        const refs = await refsStore.read();
+        const objectId = await resolveTarget(opts.target, page, refs);
+        await page.waitForTextInElement(objectId, opts.text, timeoutMs);
+      } else if (opts.text) {
+        // Wait for text anywhere on page
+        await page.waitForText(opts.text, timeoutMs);
+      } else if (opts.target && "selector" in opts.target) {
+        // Wait for element to exist
+        await page.waitForSelector(opts.target.selector, timeoutMs);
+      }
+    });
+  },
   stdout: (s) => Deno.stdout.writeSync(encoder.encode(s)),
   stderr: (s) => Deno.stderr.writeSync(encoder.encode(s)),
 };

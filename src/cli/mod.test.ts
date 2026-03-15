@@ -6,12 +6,15 @@ function stubDeps(overrides: Partial<CliDeps> = {}): CliDeps {
     startChrome: () =>
       Promise.resolve({ status: "started" as const, chromePid: 456, cdpPort: 9222 }),
     stopChrome: () => Promise.resolve(),
-    navigate: () => Promise.resolve(),
+    navigate: () => Promise.resolve({}),
     snapshot: () => Promise.resolve({ yaml: "- heading", refs: {} }),
     evaluate: () => Promise.resolve({ result: null }),
     screenshot: () => Promise.resolve("/tmp/shot.png"),
     listPages: () => Promise.resolve([]),
     selectPage: () => Promise.resolve(),
+    click: () => Promise.resolve({}),
+    fill: () => Promise.resolve({}),
+    wait: () => Promise.resolve(),
     stdout: () => {},
     stderr: () => {},
     ...overrides,
@@ -150,7 +153,7 @@ Deno.test("navigate calls dep with url and prints confirmation", async () => {
     stubDeps({
       navigate: (url) => {
         navigatedUrl = url;
-        return Promise.resolve();
+        return Promise.resolve({});
       },
       stdout: io.stdout,
     }),
@@ -178,6 +181,24 @@ Deno.test("navigate reports error from dep", async () => {
   );
   assertEquals(code, 1);
   assertStringIncludes(io.err, "chrome is not running");
+});
+
+Deno.test("navigate --snapshot outputs YAML to stdout and status to stderr", async () => {
+  const io = capture();
+  const code = await runCli(
+    ["navigate", "https://example.com", "--snapshot"],
+    stubDeps({
+      navigate: (_url, opts) => {
+        assertEquals(opts?.includeSnapshot, true);
+        return Promise.resolve({ snapshot: { yaml: "- heading\n", refs: {} } });
+      },
+      stdout: io.stdout,
+      stderr: io.stderr,
+    }),
+  );
+  assertEquals(code, 0);
+  assertStringIncludes(io.err, "navigated to https://example.com");
+  assertStringIncludes(io.out, "- heading");
 });
 
 // --- snapshot ---
@@ -453,4 +474,314 @@ Deno.test("page reports error from dep", async () => {
   );
   assertEquals(code, 1);
   assertStringIncludes(io.err, "no page with targetId");
+});
+
+// --- click ---
+
+Deno.test("click --ref calls dep with ref target", async () => {
+  let receivedTarget: unknown;
+  const io = capture();
+  const code = await runCli(
+    ["click", "--ref", "e5"],
+    stubDeps({
+      click: (target) => {
+        receivedTarget = target;
+        return Promise.resolve({});
+      },
+      stdout: io.stdout,
+    }),
+  );
+  assertEquals(code, 0);
+  assertEquals(receivedTarget, { ref: "e5" });
+  assertStringIncludes(io.out, "clicked ref e5");
+});
+
+Deno.test("click --selector calls dep with selector target", async () => {
+  let receivedTarget: unknown;
+  const io = capture();
+  const code = await runCli(
+    ["click", "--selector", "#btn"],
+    stubDeps({
+      click: (target) => {
+        receivedTarget = target;
+        return Promise.resolve({});
+      },
+      stdout: io.stdout,
+    }),
+  );
+  assertEquals(code, 0);
+  assertEquals(receivedTarget, { selector: "#btn" });
+  assertStringIncludes(io.out, 'clicked selector "#btn"');
+});
+
+Deno.test("click without target returns error", async () => {
+  const io = capture();
+  const code = await runCli(["click"], stubDeps({ stderr: io.stderr }));
+  assertEquals(code, 1);
+  assertStringIncludes(io.err, "either --ref or --selector is required");
+});
+
+Deno.test("click with both --ref and --selector returns error", async () => {
+  const io = capture();
+  const code = await runCli(
+    ["click", "--ref", "e5", "--selector", "#btn"],
+    stubDeps({ stderr: io.stderr }),
+  );
+  assertEquals(code, 1);
+  assertStringIncludes(io.err, "not both");
+});
+
+Deno.test("click --snapshot outputs YAML", async () => {
+  const io = capture();
+  const code = await runCli(
+    ["click", "--ref", "e5", "--snapshot"],
+    stubDeps({
+      click: (_target, opts) => {
+        assertEquals(opts?.includeSnapshot, true);
+        return Promise.resolve({ snapshot: { yaml: "- button\n", refs: {} } });
+      },
+      stdout: io.stdout,
+      stderr: io.stderr,
+    }),
+  );
+  assertEquals(code, 0);
+  assertStringIncludes(io.err, "clicked ref e5");
+  assertStringIncludes(io.out, "- button");
+});
+
+Deno.test("click reports error from dep", async () => {
+  const io = capture();
+  const code = await runCli(
+    ["click", "--ref", "e5"],
+    stubDeps({
+      click: () => Promise.reject(new Error("ref e5 is stale")),
+      stderr: io.stderr,
+    }),
+  );
+  assertEquals(code, 1);
+  assertStringIncludes(io.err, "ref e5 is stale");
+});
+
+// --- fill ---
+
+Deno.test("fill --ref with value calls dep correctly", async () => {
+  let receivedTarget: unknown;
+  let receivedValue: string | undefined;
+  const io = capture();
+  const code = await runCli(
+    ["fill", "--ref", "e3", "hello world"],
+    stubDeps({
+      fill: (target, value) => {
+        receivedTarget = target;
+        receivedValue = value;
+        return Promise.resolve({});
+      },
+      stdout: io.stdout,
+    }),
+  );
+  assertEquals(code, 0);
+  assertEquals(receivedTarget, { ref: "e3" });
+  assertEquals(receivedValue, "hello world");
+  assertStringIncludes(io.out, "filled ref e3");
+});
+
+Deno.test("fill --selector with value calls dep correctly", async () => {
+  let receivedTarget: unknown;
+  const io = capture();
+  const code = await runCli(
+    ["fill", "--selector", "input[name=email]", "test@example.com"],
+    stubDeps({
+      fill: (target) => {
+        receivedTarget = target;
+        return Promise.resolve({});
+      },
+      stdout: io.stdout,
+    }),
+  );
+  assertEquals(code, 0);
+  assertEquals(receivedTarget, { selector: "input[name=email]" });
+});
+
+Deno.test("fill without value returns error", async () => {
+  const io = capture();
+  const code = await runCli(
+    ["fill", "--ref", "e3"],
+    stubDeps({ stderr: io.stderr }),
+  );
+  assertEquals(code, 1);
+  assertStringIncludes(io.err, "value is required");
+});
+
+Deno.test("fill without target returns error", async () => {
+  const io = capture();
+  const code = await runCli(
+    ["fill", "hello"],
+    stubDeps({ stderr: io.stderr }),
+  );
+  assertEquals(code, 1);
+  assertStringIncludes(io.err, "either --ref or --selector is required");
+});
+
+Deno.test("fill --snapshot outputs YAML", async () => {
+  const io = capture();
+  const code = await runCli(
+    ["fill", "--ref", "e3", "hello", "--snapshot"],
+    stubDeps({
+      fill: (_target, _value, opts) => {
+        assertEquals(opts?.includeSnapshot, true);
+        return Promise.resolve({ snapshot: { yaml: "- textbox\n", refs: {} } });
+      },
+      stdout: io.stdout,
+      stderr: io.stderr,
+    }),
+  );
+  assertEquals(code, 0);
+  assertStringIncludes(io.err, "filled ref e3");
+  assertStringIncludes(io.out, "- textbox");
+});
+
+Deno.test("fill reports error from dep", async () => {
+  const io = capture();
+  const code = await runCli(
+    ["fill", "--ref", "e3", "hello"],
+    stubDeps({
+      fill: () => Promise.reject(new Error("chrome is not running")),
+      stderr: io.stderr,
+    }),
+  );
+  assertEquals(code, 1);
+  assertStringIncludes(io.err, "chrome is not running");
+});
+
+// --- wait ---
+
+Deno.test("wait --selector calls dep with selector target", async () => {
+  let receivedOpts: unknown;
+  const io = capture();
+  const code = await runCli(
+    ["wait", "--selector", ".result"],
+    stubDeps({
+      wait: (opts) => {
+        receivedOpts = opts;
+        return Promise.resolve();
+      },
+      stdout: io.stdout,
+    }),
+  );
+  assertEquals(code, 0);
+  assertEquals(receivedOpts, {
+    target: { selector: ".result" },
+    text: undefined,
+    timeoutMs: undefined,
+  });
+  assertStringIncludes(io.out, 'found element matching ".result"');
+});
+
+Deno.test("wait --text calls dep with text only", async () => {
+  let receivedOpts: unknown;
+  const io = capture();
+  const code = await runCli(
+    ["wait", "--text", "Success"],
+    stubDeps({
+      wait: (opts) => {
+        receivedOpts = opts;
+        return Promise.resolve();
+      },
+      stdout: io.stdout,
+    }),
+  );
+  assertEquals(code, 0);
+  assertEquals(receivedOpts, { target: undefined, text: "Success", timeoutMs: undefined });
+  assertStringIncludes(io.out, 'found text "Success"');
+});
+
+Deno.test("wait --ref --text calls dep with ref target and text", async () => {
+  let receivedOpts: unknown;
+  const io = capture();
+  const code = await runCli(
+    ["wait", "--ref", "e5", "--text", "Done"],
+    stubDeps({
+      wait: (opts) => {
+        receivedOpts = opts;
+        return Promise.resolve();
+      },
+      stdout: io.stdout,
+    }),
+  );
+  assertEquals(code, 0);
+  assertEquals(receivedOpts, { target: { ref: "e5" }, text: "Done", timeoutMs: undefined });
+  assertStringIncludes(io.out, 'found text "Done" in ref e5');
+});
+
+Deno.test("wait --selector --text calls dep with selector and text", async () => {
+  let receivedOpts: unknown;
+  const io = capture();
+  const code = await runCli(
+    ["wait", "--selector", ".result", "--text", "OK"],
+    stubDeps({
+      wait: (opts) => {
+        receivedOpts = opts;
+        return Promise.resolve();
+      },
+      stdout: io.stdout,
+    }),
+  );
+  assertEquals(code, 0);
+  assertEquals(receivedOpts, { target: { selector: ".result" }, text: "OK", timeoutMs: undefined });
+  assertStringIncludes(io.out, 'found text "OK" in selector ".result"');
+});
+
+Deno.test("wait --timeout passes timeout to dep", async () => {
+  let receivedOpts: unknown;
+  const code = await runCli(
+    ["wait", "--text", "OK", "--timeout", "3000"],
+    stubDeps({
+      wait: (opts) => {
+        receivedOpts = opts;
+        return Promise.resolve();
+      },
+    }),
+  );
+  assertEquals(code, 0);
+  assertEquals((receivedOpts as { timeoutMs: number }).timeoutMs, 3000);
+});
+
+Deno.test("wait --ref without --text returns error", async () => {
+  const io = capture();
+  const code = await runCli(
+    ["wait", "--ref", "e5"],
+    stubDeps({ stderr: io.stderr }),
+  );
+  assertEquals(code, 1);
+  assertStringIncludes(io.err, "--ref requires --text");
+});
+
+Deno.test("wait without any condition returns error", async () => {
+  const io = capture();
+  const code = await runCli(["wait"], stubDeps({ stderr: io.stderr }));
+  assertEquals(code, 1);
+  assertStringIncludes(io.err, "at least one of");
+});
+
+Deno.test("wait --ref and --selector returns error", async () => {
+  const io = capture();
+  const code = await runCli(
+    ["wait", "--ref", "e5", "--selector", ".x", "--text", "hi"],
+    stubDeps({ stderr: io.stderr }),
+  );
+  assertEquals(code, 1);
+  assertStringIncludes(io.err, "not both");
+});
+
+Deno.test("wait reports timeout error from dep", async () => {
+  const io = capture();
+  const code = await runCli(
+    ["wait", "--text", "never"],
+    stubDeps({
+      wait: () => Promise.reject(new Error('timed out waiting for text "never" (5000ms)')),
+      stderr: io.stderr,
+    }),
+  );
+  assertEquals(code, 1);
+  assertStringIncludes(io.err, "timed out");
 });
