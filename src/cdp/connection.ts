@@ -293,7 +293,7 @@ export async function createPageConnection(
         expression: `(() => {
           const sel = ${sel};
           const els = document.querySelectorAll(sel);
-          if (els.length === 0) throw new Error("no_match:" + els.length);
+          if (els.length === 0) throw new Error("no_match");
           if (els.length > 1) throw new Error("multiple:" + els.length);
           return els[0];
         })()`,
@@ -305,7 +305,7 @@ export async function createPageConnection(
     if (evalResult.exceptionDetails) {
       const desc = evalResult.exceptionDetails.exception?.description ??
         evalResult.exceptionDetails.text ?? "";
-      if (desc.includes("no_match:")) {
+      if (desc.includes("no_match")) {
         throw new Error(`selector "${selector}" did not match any element`);
       }
       if (desc.includes("multiple:")) {
