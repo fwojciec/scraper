@@ -1,7 +1,7 @@
 // Composition root: wires adapters -> domain.
 // `scraper start` launches Chrome and exits. All other commands connect to CDP directly.
 
-import { type CliDeps, runCli, type StartOptions, type StartResult } from "./cli/mod.ts";
+import { type CliDeps, runCli } from "./cli/mod.ts";
 import {
   buildBrowserWsUrl,
   type CdpBrowserService,
@@ -23,7 +23,10 @@ import type {
   ElementTarget,
   PageInfo,
   RefMap,
-  WaitOptions,
+  ScraperApp,
+  StartOptions,
+  StartResult,
+  WaitRequest,
 } from "./domain/mod.ts";
 
 const HOME = Deno.env.get("HOME");
@@ -562,20 +565,22 @@ function executeAction(
   });
 }
 
-const deps: CliDeps = {
-  startChrome,
-  stopChrome,
+const warn = (s: string) => Deno.stderr.writeSync(encoder.encode(s));
+
+const app: ScraperApp = {
+  start: startChrome,
+  stop: stopChrome,
   navigate(url: string, opts?: ActionOptions) {
     return withPageConnection(async (page) => {
       return await withDialogHandling(page, opts?.onDialog, async () => {
         await page.navigate(url);
         if (opts?.includeSnapshot) {
-          return await postAction(page, opts, deps.stderr);
+          return await postAction(page, opts, warn);
         }
         // Navigation without --snapshot: wait for network idle, then invalidate refs
         const timedOut = await page.waitForNetworkIdle();
         if (timedOut) {
-          deps.stderr("warning: network idle timed out after navigation\n");
+          warn("warning: network idle timed out after navigation\n");
         }
         await refsStore.remove();
         return {};
@@ -591,13 +596,13 @@ const deps: CliDeps = {
   screenshot(fullPage?: boolean) {
     return withPageConnection((page) => page.screenshot(fullPage));
   },
-  listPages,
+  pages: listPages,
   selectPage,
   click(target: ElementTarget, opts?: ActionOptions) {
     return withPageConnection(async (page) => {
       const refs = await refsStore.read();
       const objectId = await resolveTarget(target, page, refs);
-      return await executeAction(page, () => page.clickElement(objectId), opts, deps.stderr);
+      return await executeAction(page, () => page.clickElement(objectId), opts, warn);
     });
   },
   fill(target: ElementTarget, value: string, opts?: ActionOptions) {
@@ -608,7 +613,7 @@ const deps: CliDeps = {
         page,
         () => page.fillElement(objectId, value),
         opts,
-        deps.stderr,
+        warn,
       );
     });
   },
@@ -620,7 +625,7 @@ const deps: CliDeps = {
         page,
         () => page.typeText(objectId, text),
         opts,
-        deps.stderr,
+        warn,
       );
     });
   },
@@ -632,7 +637,7 @@ const deps: CliDeps = {
         page,
         () => page.selectOption(objectId, value),
         opts,
-        deps.stderr,
+        warn,
       );
     });
   },
@@ -644,7 +649,7 @@ const deps: CliDeps = {
         page,
         () => page.submitForm(objectId),
         opts,
-        deps.stderr,
+        warn,
       );
     });
   },
@@ -661,7 +666,7 @@ const deps: CliDeps = {
           await page.pressKey(key);
         },
         opts,
-        deps.stderr,
+        warn,
       );
     });
   },
@@ -673,30 +678,32 @@ const deps: CliDeps = {
         page,
         () => page.uploadFile(objectId, filePath),
         opts,
-        deps.stderr,
+        warn,
       );
     });
   },
-  wait(opts: WaitOptions) {
+  wait(request: WaitRequest) {
     return withPageConnection(async (page) => {
-      const timeoutMs = opts.timeoutMs;
-
-      if (opts.target && opts.text) {
-        // Wait for text within element
-        const refs = await refsStore.read();
-        const objectId = await resolveTarget(opts.target, page, refs);
-        await page.waitForTextInElement(objectId, opts.text, timeoutMs);
-      } else if (opts.text) {
-        // Wait for text anywhere on page
-        await page.waitForText(opts.text, timeoutMs);
-      } else if (opts.target && "selector" in opts.target) {
-        // Wait for element to exist
-        await page.waitForSelector(opts.target.selector, timeoutMs);
-      } else if (opts.target && "ref" in opts.target) {
-        throw new Error("ref wait requires text");
+      switch (request.kind) {
+        case "textInElement": {
+          const refs = await refsStore.read();
+          const objectId = await resolveTarget(request.target, page, refs);
+          await page.waitForTextInElement(objectId, request.text, request.timeoutMs);
+          break;
+        }
+        case "text":
+          await page.waitForText(request.text, request.timeoutMs);
+          break;
+        case "selector":
+          await page.waitForSelector(request.selector, request.timeoutMs);
+          break;
       }
     });
   },
+};
+
+const deps: CliDeps = {
+  app,
   stdout: (s) => Deno.stdout.writeSync(encoder.encode(s)),
   stderr: (s) => Deno.stderr.writeSync(encoder.encode(s)),
 };

@@ -1,16 +1,16 @@
 import { assertEquals, assertStringIncludes } from "@std/assert";
 import { type CliDeps, runCli } from "./mod.ts";
+import type { ScraperApp } from "../domain/mod.ts";
 
-function stubDeps(overrides: Partial<CliDeps> = {}): CliDeps {
+function stubApp(overrides: Partial<ScraperApp> = {}): ScraperApp {
   return {
-    startChrome: () =>
-      Promise.resolve({ status: "started" as const, chromePid: 456, cdpPort: 9222 }),
-    stopChrome: () => Promise.resolve(),
+    start: () => Promise.resolve({ status: "started" as const, chromePid: 456, cdpPort: 9222 }),
+    stop: () => Promise.resolve(),
     navigate: () => Promise.resolve({}),
     snapshot: () => Promise.resolve({ yaml: "- heading", refs: {} }),
     evaluate: () => Promise.resolve({ result: null }),
     screenshot: () => Promise.resolve("/tmp/shot.png"),
-    listPages: () => Promise.resolve([]),
+    pages: () => Promise.resolve([]),
     selectPage: () => Promise.resolve(),
     click: () => Promise.resolve({}),
     fill: () => Promise.resolve({}),
@@ -20,9 +20,21 @@ function stubDeps(overrides: Partial<CliDeps> = {}): CliDeps {
     submit: () => Promise.resolve({}),
     pressKey: () => Promise.resolve({}),
     upload: () => Promise.resolve({}),
-    stdout: () => {},
-    stderr: () => {},
     ...overrides,
+  };
+}
+
+function stubDeps(
+  overrides: {
+    app?: Partial<ScraperApp>;
+    stdout?: (s: string) => void;
+    stderr?: (s: string) => void;
+  } = {},
+): CliDeps {
+  return {
+    app: stubApp(overrides.app),
+    stdout: overrides.stdout ?? (() => {}),
+    stderr: overrides.stderr ?? (() => {}),
   };
 }
 
@@ -69,8 +81,9 @@ Deno.test("start prints started message with pid and port", async () => {
   const code = await runCli(
     ["start"],
     stubDeps({
-      startChrome: () =>
-        Promise.resolve({ status: "started" as const, chromePid: 456, cdpPort: 9222 }),
+      app: {
+        start: () => Promise.resolve({ status: "started" as const, chromePid: 456, cdpPort: 9222 }),
+      },
       stdout: io.stdout,
     }),
   );
@@ -85,8 +98,10 @@ Deno.test("start with already running prints info", async () => {
   const code = await runCli(
     ["start"],
     stubDeps({
-      startChrome: () =>
-        Promise.resolve({ status: "already_running" as const, chromePid: 123, cdpPort: 9222 }),
+      app: {
+        start: () =>
+          Promise.resolve({ status: "already_running" as const, chromePid: 123, cdpPort: 9222 }),
+      },
       stdout: io.stdout,
     }),
   );
@@ -100,9 +115,11 @@ Deno.test("start passes --chrome-path option", async () => {
   const code = await runCli(
     ["start", "--chrome-path", "/usr/bin/chromium"],
     stubDeps({
-      startChrome: (opts) => {
-        receivedPath = opts.chromePath;
-        return Promise.resolve({ status: "started" as const, chromePid: 456, cdpPort: 9222 });
+      app: {
+        start: (opts) => {
+          receivedPath = opts.chromePath;
+          return Promise.resolve({ status: "started" as const, chromePid: 456, cdpPort: 9222 });
+        },
       },
     }),
   );
@@ -115,7 +132,7 @@ Deno.test("start reports failure", async () => {
   const code = await runCli(
     ["start"],
     stubDeps({
-      startChrome: () => Promise.reject(new Error("Chrome not found")),
+      app: { start: () => Promise.reject(new Error("Chrome not found")) },
       stderr: io.stderr,
     }),
   );
@@ -140,7 +157,7 @@ Deno.test("stop reports error", async () => {
   const code = await runCli(
     ["stop"],
     stubDeps({
-      stopChrome: () => Promise.reject(new Error("chrome is not running")),
+      app: { stop: () => Promise.reject(new Error("chrome is not running")) },
       stderr: io.stderr,
     }),
   );
@@ -156,9 +173,11 @@ Deno.test("navigate calls dep with url and prints confirmation", async () => {
   const code = await runCli(
     ["navigate", "https://example.com"],
     stubDeps({
-      navigate: (url) => {
-        navigatedUrl = url;
-        return Promise.resolve({});
+      app: {
+        navigate: (url) => {
+          navigatedUrl = url;
+          return Promise.resolve({});
+        },
       },
       stdout: io.stdout,
     }),
@@ -180,7 +199,7 @@ Deno.test("navigate reports error from dep", async () => {
   const code = await runCli(
     ["navigate", "https://example.com"],
     stubDeps({
-      navigate: () => Promise.reject(new Error("chrome is not running")),
+      app: { navigate: () => Promise.reject(new Error("chrome is not running")) },
       stderr: io.stderr,
     }),
   );
@@ -193,9 +212,11 @@ Deno.test("navigate --snapshot outputs YAML to stdout and status to stderr", asy
   const code = await runCli(
     ["navigate", "https://example.com", "--snapshot"],
     stubDeps({
-      navigate: (_url, opts) => {
-        assertEquals(opts?.includeSnapshot, true);
-        return Promise.resolve({ snapshot: { yaml: "- heading\n", refs: {} } });
+      app: {
+        navigate: (_url, opts) => {
+          assertEquals(opts?.includeSnapshot, true);
+          return Promise.resolve({ snapshot: { yaml: "- heading\n", refs: {} } });
+        },
       },
       stdout: io.stdout,
       stderr: io.stderr,
@@ -214,7 +235,7 @@ Deno.test("snapshot prints YAML", async () => {
   const code = await runCli(
     ["snapshot"],
     stubDeps({
-      snapshot: () => Promise.resolve({ yaml, refs: {} }),
+      app: { snapshot: () => Promise.resolve({ yaml, refs: {} }) },
       stdout: io.stdout,
     }),
   );
@@ -227,9 +248,11 @@ Deno.test("snapshot passes all options", async () => {
   const code = await runCli(
     ["snapshot", "--max-depth", "5", "--max-nodes", "100", "--selector", "#main"],
     stubDeps({
-      snapshot: (opts: Record<string, unknown>) => {
-        receivedOpts = { ...opts };
-        return Promise.resolve({ yaml: "- heading", refs: {} });
+      app: {
+        snapshot: (opts: Record<string, unknown>) => {
+          receivedOpts = { ...opts };
+          return Promise.resolve({ yaml: "- heading", refs: {} });
+        },
       },
     }),
   );
@@ -254,7 +277,7 @@ Deno.test("snapshot reports error from dep", async () => {
   const code = await runCli(
     ["snapshot"],
     stubDeps({
-      snapshot: () => Promise.reject(new Error("chrome is not running")),
+      app: { snapshot: () => Promise.reject(new Error("chrome is not running")) },
       stderr: io.stderr,
     }),
   );
@@ -270,9 +293,11 @@ Deno.test("eval calls dep with expression and prints JSON result", async () => {
   const code = await runCli(
     ["eval", "document.title"],
     stubDeps({
-      evaluate: (expr) => {
-        receivedExpr = expr;
-        return Promise.resolve({ result: { title: "Test" } });
+      app: {
+        evaluate: (expr) => {
+          receivedExpr = expr;
+          return Promise.resolve({ result: { title: "Test" } });
+        },
       },
       stdout: io.stdout,
     }),
@@ -294,7 +319,7 @@ Deno.test("eval reports error from dep", async () => {
   const code = await runCli(
     ["eval", "1+1"],
     stubDeps({
-      evaluate: () => Promise.reject(new Error("chrome is not running")),
+      app: { evaluate: () => Promise.reject(new Error("chrome is not running")) },
       stderr: io.stderr,
     }),
   );
@@ -309,7 +334,7 @@ Deno.test("screenshot prints path", async () => {
   const code = await runCli(
     ["screenshot"],
     stubDeps({
-      screenshot: () => Promise.resolve("/tmp/shot.png"),
+      app: { screenshot: () => Promise.resolve("/tmp/shot.png") },
       stdout: io.stdout,
     }),
   );
@@ -322,9 +347,11 @@ Deno.test("screenshot passes --full-page option", async () => {
   const code = await runCli(
     ["screenshot", "--full-page"],
     stubDeps({
-      screenshot: (fullPage) => {
-        receivedFullPage = fullPage;
-        return Promise.resolve("/tmp/shot.png");
+      app: {
+        screenshot: (fullPage) => {
+          receivedFullPage = fullPage;
+          return Promise.resolve("/tmp/shot.png");
+        },
       },
     }),
   );
@@ -337,7 +364,7 @@ Deno.test("screenshot reports error from dep", async () => {
   const code = await runCli(
     ["screenshot"],
     stubDeps({
-      screenshot: () => Promise.reject(new Error("chrome is not running")),
+      app: { screenshot: () => Promise.reject(new Error("chrome is not running")) },
       stderr: io.stderr,
     }),
   );
@@ -352,9 +379,11 @@ Deno.test("start --attach prints attached message with port", async () => {
   const code = await runCli(
     ["start", "--attach"],
     stubDeps({
-      startChrome: (opts) => {
-        assertEquals(opts.attach, true);
-        return Promise.resolve({ status: "attached" as const, cdpPort: 9333 });
+      app: {
+        start: (opts) => {
+          assertEquals(opts.attach, true);
+          return Promise.resolve({ status: "attached" as const, cdpPort: 9333 });
+        },
       },
       stdout: io.stdout,
     }),
@@ -370,9 +399,11 @@ Deno.test("start --attach --channel passes channel option", async () => {
   const code = await runCli(
     ["start", "--attach", "--channel", "beta"],
     stubDeps({
-      startChrome: (opts) => {
-        receivedChannel = opts.channel;
-        return Promise.resolve({ status: "attached" as const, cdpPort: 9333 });
+      app: {
+        start: (opts) => {
+          receivedChannel = opts.channel;
+          return Promise.resolve({ status: "attached" as const, cdpPort: 9333 });
+        },
       },
     }),
   );
@@ -385,7 +416,9 @@ Deno.test("start already attached prints info without pid", async () => {
   const code = await runCli(
     ["start", "--attach"],
     stubDeps({
-      startChrome: () => Promise.resolve({ status: "already_running" as const, cdpPort: 9333 }),
+      app: {
+        start: () => Promise.resolve({ status: "already_running" as const, cdpPort: 9333 }),
+      },
       stdout: io.stdout,
     }),
   );
@@ -401,11 +434,13 @@ Deno.test("pages lists open tabs", async () => {
   const code = await runCli(
     ["pages"],
     stubDeps({
-      listPages: () =>
-        Promise.resolve([
-          { pageId: "abc", url: "https://example.com", title: "Example", active: true },
-          { pageId: "def", url: "about:blank", title: "", active: false },
-        ]),
+      app: {
+        pages: () =>
+          Promise.resolve([
+            { pageId: "abc", url: "https://example.com", title: "Example", active: true },
+            { pageId: "def", url: "about:blank", title: "", active: false },
+          ]),
+      },
       stdout: io.stdout,
     }),
   );
@@ -420,7 +455,7 @@ Deno.test("pages shows message when no tabs", async () => {
   const code = await runCli(
     ["pages"],
     stubDeps({
-      listPages: () => Promise.resolve([]),
+      app: { pages: () => Promise.resolve([]) },
       stdout: io.stdout,
     }),
   );
@@ -433,7 +468,7 @@ Deno.test("pages reports error from dep", async () => {
   const code = await runCli(
     ["pages"],
     stubDeps({
-      listPages: () => Promise.reject(new Error("chrome is not running")),
+      app: { pages: () => Promise.reject(new Error("chrome is not running")) },
       stderr: io.stderr,
     }),
   );
@@ -449,9 +484,11 @@ Deno.test("page switches active tab", async () => {
   const code = await runCli(
     ["page", "abc-123"],
     stubDeps({
-      selectPage: (id) => {
-        receivedId = id;
-        return Promise.resolve();
+      app: {
+        selectPage: (id) => {
+          receivedId = id;
+          return Promise.resolve();
+        },
       },
       stdout: io.stdout,
     }),
@@ -473,7 +510,7 @@ Deno.test("page reports error from dep", async () => {
   const code = await runCli(
     ["page", "abc-123"],
     stubDeps({
-      selectPage: () => Promise.reject(new Error("no page with id")),
+      app: { selectPage: () => Promise.reject(new Error("no page with id")) },
       stderr: io.stderr,
     }),
   );
@@ -489,9 +526,11 @@ Deno.test("click --ref calls dep with ref target", async () => {
   const code = await runCli(
     ["click", "--ref", "e5"],
     stubDeps({
-      click: (target) => {
-        receivedTarget = target;
-        return Promise.resolve({});
+      app: {
+        click: (target) => {
+          receivedTarget = target;
+          return Promise.resolve({});
+        },
       },
       stdout: io.stdout,
     }),
@@ -507,9 +546,11 @@ Deno.test("click --selector calls dep with selector target", async () => {
   const code = await runCli(
     ["click", "--selector", "#btn"],
     stubDeps({
-      click: (target) => {
-        receivedTarget = target;
-        return Promise.resolve({});
+      app: {
+        click: (target) => {
+          receivedTarget = target;
+          return Promise.resolve({});
+        },
       },
       stdout: io.stdout,
     }),
@@ -541,9 +582,11 @@ Deno.test("click --snapshot outputs YAML", async () => {
   const code = await runCli(
     ["click", "--ref", "e5", "--snapshot"],
     stubDeps({
-      click: (_target, opts) => {
-        assertEquals(opts?.includeSnapshot, true);
-        return Promise.resolve({ snapshot: { yaml: "- button\n", refs: {} } });
+      app: {
+        click: (_target, opts) => {
+          assertEquals(opts?.includeSnapshot, true);
+          return Promise.resolve({ snapshot: { yaml: "- button\n", refs: {} } });
+        },
       },
       stdout: io.stdout,
       stderr: io.stderr,
@@ -559,7 +602,7 @@ Deno.test("click reports error from dep", async () => {
   const code = await runCli(
     ["click", "--ref", "e5"],
     stubDeps({
-      click: () => Promise.reject(new Error("ref e5 is stale")),
+      app: { click: () => Promise.reject(new Error("ref e5 is stale")) },
       stderr: io.stderr,
     }),
   );
@@ -576,10 +619,12 @@ Deno.test("fill --ref with value calls dep correctly", async () => {
   const code = await runCli(
     ["fill", "--ref", "e3", "hello world"],
     stubDeps({
-      fill: (target, value) => {
-        receivedTarget = target;
-        receivedValue = value;
-        return Promise.resolve({});
+      app: {
+        fill: (target, value) => {
+          receivedTarget = target;
+          receivedValue = value;
+          return Promise.resolve({});
+        },
       },
       stdout: io.stdout,
     }),
@@ -596,9 +641,11 @@ Deno.test("fill --selector with value calls dep correctly", async () => {
   const code = await runCli(
     ["fill", "--selector", "input[name=email]", "test@example.com"],
     stubDeps({
-      fill: (target) => {
-        receivedTarget = target;
-        return Promise.resolve({});
+      app: {
+        fill: (target) => {
+          receivedTarget = target;
+          return Promise.resolve({});
+        },
       },
       stdout: io.stdout,
     }),
@@ -632,9 +679,11 @@ Deno.test("fill --snapshot outputs YAML", async () => {
   const code = await runCli(
     ["fill", "--ref", "e3", "hello", "--snapshot"],
     stubDeps({
-      fill: (_target, _value, opts) => {
-        assertEquals(opts?.includeSnapshot, true);
-        return Promise.resolve({ snapshot: { yaml: "- textbox\n", refs: {} } });
+      app: {
+        fill: (_target, _value, opts) => {
+          assertEquals(opts?.includeSnapshot, true);
+          return Promise.resolve({ snapshot: { yaml: "- textbox\n", refs: {} } });
+        },
       },
       stdout: io.stdout,
       stderr: io.stderr,
@@ -650,7 +699,7 @@ Deno.test("fill reports error from dep", async () => {
   const code = await runCli(
     ["fill", "--ref", "e3", "hello"],
     stubDeps({
-      fill: () => Promise.reject(new Error("chrome is not running")),
+      app: { fill: () => Promise.reject(new Error("chrome is not running")) },
       stderr: io.stderr,
     }),
   );
@@ -660,95 +709,115 @@ Deno.test("fill reports error from dep", async () => {
 
 // --- wait ---
 
-Deno.test("wait --selector calls dep with selector target", async () => {
-  let receivedOpts: unknown;
+Deno.test("wait --selector calls dep with selector request", async () => {
+  let receivedRequest: unknown;
   const io = capture();
   const code = await runCli(
     ["wait", "--selector", ".result"],
     stubDeps({
-      wait: (opts) => {
-        receivedOpts = opts;
-        return Promise.resolve();
+      app: {
+        wait: (request) => {
+          receivedRequest = request;
+          return Promise.resolve();
+        },
       },
       stdout: io.stdout,
     }),
   );
   assertEquals(code, 0);
-  assertEquals(receivedOpts, {
-    target: { selector: ".result" },
-    text: undefined,
+  assertEquals(receivedRequest, {
+    kind: "selector",
+    selector: ".result",
     timeoutMs: undefined,
   });
   assertStringIncludes(io.out, 'found element matching ".result"');
 });
 
-Deno.test("wait --text calls dep with text only", async () => {
-  let receivedOpts: unknown;
+Deno.test("wait --text calls dep with text request", async () => {
+  let receivedRequest: unknown;
   const io = capture();
   const code = await runCli(
     ["wait", "--text", "Success"],
     stubDeps({
-      wait: (opts) => {
-        receivedOpts = opts;
-        return Promise.resolve();
+      app: {
+        wait: (request) => {
+          receivedRequest = request;
+          return Promise.resolve();
+        },
       },
       stdout: io.stdout,
     }),
   );
   assertEquals(code, 0);
-  assertEquals(receivedOpts, { target: undefined, text: "Success", timeoutMs: undefined });
+  assertEquals(receivedRequest, { kind: "text", text: "Success", timeoutMs: undefined });
   assertStringIncludes(io.out, 'found text "Success"');
 });
 
-Deno.test("wait --ref --text calls dep with ref target and text", async () => {
-  let receivedOpts: unknown;
+Deno.test("wait --ref --text calls dep with textInElement request", async () => {
+  let receivedRequest: unknown;
   const io = capture();
   const code = await runCli(
     ["wait", "--ref", "e5", "--text", "Done"],
     stubDeps({
-      wait: (opts) => {
-        receivedOpts = opts;
-        return Promise.resolve();
+      app: {
+        wait: (request) => {
+          receivedRequest = request;
+          return Promise.resolve();
+        },
       },
       stdout: io.stdout,
     }),
   );
   assertEquals(code, 0);
-  assertEquals(receivedOpts, { target: { ref: "e5" }, text: "Done", timeoutMs: undefined });
+  assertEquals(receivedRequest, {
+    kind: "textInElement",
+    target: { ref: "e5" },
+    text: "Done",
+    timeoutMs: undefined,
+  });
   assertStringIncludes(io.out, 'found text "Done" in ref e5');
 });
 
-Deno.test("wait --selector --text calls dep with selector and text", async () => {
-  let receivedOpts: unknown;
+Deno.test("wait --selector --text calls dep with textInElement request", async () => {
+  let receivedRequest: unknown;
   const io = capture();
   const code = await runCli(
     ["wait", "--selector", ".result", "--text", "OK"],
     stubDeps({
-      wait: (opts) => {
-        receivedOpts = opts;
-        return Promise.resolve();
+      app: {
+        wait: (request) => {
+          receivedRequest = request;
+          return Promise.resolve();
+        },
       },
       stdout: io.stdout,
     }),
   );
   assertEquals(code, 0);
-  assertEquals(receivedOpts, { target: { selector: ".result" }, text: "OK", timeoutMs: undefined });
+  assertEquals(receivedRequest, {
+    kind: "textInElement",
+    target: { selector: ".result" },
+    text: "OK",
+    timeoutMs: undefined,
+  });
   assertStringIncludes(io.out, 'found text "OK" in selector ".result"');
 });
 
 Deno.test("wait --timeout passes timeout to dep", async () => {
-  let receivedOpts: unknown;
+  let receivedRequest: unknown;
   const code = await runCli(
     ["wait", "--text", "OK", "--timeout", "3000"],
     stubDeps({
-      wait: (opts) => {
-        receivedOpts = opts;
-        return Promise.resolve();
+      app: {
+        wait: (request) => {
+          receivedRequest = request;
+          return Promise.resolve();
+        },
       },
     }),
   );
   assertEquals(code, 0);
-  assertEquals((receivedOpts as { timeoutMs: number }).timeoutMs, 3000);
+  assertEquals((receivedRequest as { timeoutMs: number }).timeoutMs, 3000);
 });
 
 Deno.test("wait --ref without --text returns error", async () => {
@@ -783,7 +852,9 @@ Deno.test("wait reports timeout error from dep", async () => {
   const code = await runCli(
     ["wait", "--text", "never"],
     stubDeps({
-      wait: () => Promise.reject(new Error('timed out waiting for text "never" (5000ms)')),
+      app: {
+        wait: () => Promise.reject(new Error('timed out waiting for text "never" (5000ms)')),
+      },
       stderr: io.stderr,
     }),
   );
@@ -800,10 +871,12 @@ Deno.test("type --ref with text calls dep correctly", async () => {
   const code = await runCli(
     ["type", "--ref", "e3", "hello world"],
     stubDeps({
-      type: (target, text) => {
-        receivedTarget = target;
-        receivedText = text;
-        return Promise.resolve({});
+      app: {
+        type: (target, text) => {
+          receivedTarget = target;
+          receivedText = text;
+          return Promise.resolve({});
+        },
       },
       stdout: io.stdout,
     }),
@@ -820,9 +893,11 @@ Deno.test("type --selector with text calls dep correctly", async () => {
   const code = await runCli(
     ["type", "--selector", "#input", "test"],
     stubDeps({
-      type: (target) => {
-        receivedTarget = target;
-        return Promise.resolve({});
+      app: {
+        type: (target) => {
+          receivedTarget = target;
+          return Promise.resolve({});
+        },
       },
       stdout: io.stdout,
     }),
@@ -857,9 +932,11 @@ Deno.test("type --snapshot outputs YAML", async () => {
   const code = await runCli(
     ["type", "--ref", "e3", "hello", "--snapshot"],
     stubDeps({
-      type: (_target, _text, opts) => {
-        assertEquals(opts?.includeSnapshot, true);
-        return Promise.resolve({ snapshot: { yaml: "- textbox\n", refs: {} } });
+      app: {
+        type: (_target, _text, opts) => {
+          assertEquals(opts?.includeSnapshot, true);
+          return Promise.resolve({ snapshot: { yaml: "- textbox\n", refs: {} } });
+        },
       },
       stdout: io.stdout,
       stderr: io.stderr,
@@ -875,7 +952,7 @@ Deno.test("type reports error from dep", async () => {
   const code = await runCli(
     ["type", "--ref", "e3", "hello"],
     stubDeps({
-      type: () => Promise.reject(new Error("chrome is not running")),
+      app: { type: () => Promise.reject(new Error("chrome is not running")) },
       stderr: io.stderr,
     }),
   );
@@ -892,10 +969,12 @@ Deno.test("select --ref with value calls dep correctly", async () => {
   const code = await runCli(
     ["select", "--ref", "e3", "red"],
     stubDeps({
-      selectOption: (target, value) => {
-        receivedTarget = target;
-        receivedValue = value;
-        return Promise.resolve({});
+      app: {
+        selectOption: (target, value) => {
+          receivedTarget = target;
+          receivedValue = value;
+          return Promise.resolve({});
+        },
       },
       stdout: io.stdout,
     }),
@@ -912,9 +991,11 @@ Deno.test("select --selector with value calls dep correctly", async () => {
   const code = await runCli(
     ["select", "--selector", "#color", "blue"],
     stubDeps({
-      selectOption: (target) => {
-        receivedTarget = target;
-        return Promise.resolve({});
+      app: {
+        selectOption: (target) => {
+          receivedTarget = target;
+          return Promise.resolve({});
+        },
       },
       stdout: io.stdout,
     }),
@@ -949,9 +1030,11 @@ Deno.test("select --snapshot outputs YAML", async () => {
   const code = await runCli(
     ["select", "--ref", "e3", "red", "--snapshot"],
     stubDeps({
-      selectOption: (_target, _value, opts) => {
-        assertEquals(opts?.includeSnapshot, true);
-        return Promise.resolve({ snapshot: { yaml: "- combobox\n", refs: {} } });
+      app: {
+        selectOption: (_target, _value, opts) => {
+          assertEquals(opts?.includeSnapshot, true);
+          return Promise.resolve({ snapshot: { yaml: "- combobox\n", refs: {} } });
+        },
       },
       stdout: io.stdout,
       stderr: io.stderr,
@@ -967,7 +1050,7 @@ Deno.test("select reports error from dep", async () => {
   const code = await runCli(
     ["select", "--ref", "e3", "red"],
     stubDeps({
-      selectOption: () => Promise.reject(new Error("chrome is not running")),
+      app: { selectOption: () => Promise.reject(new Error("chrome is not running")) },
       stderr: io.stderr,
     }),
   );
@@ -983,9 +1066,11 @@ Deno.test("submit --ref calls dep correctly", async () => {
   const code = await runCli(
     ["submit", "--ref", "e2"],
     stubDeps({
-      submit: (target) => {
-        receivedTarget = target;
-        return Promise.resolve({});
+      app: {
+        submit: (target) => {
+          receivedTarget = target;
+          return Promise.resolve({});
+        },
       },
       stdout: io.stdout,
     }),
@@ -1001,9 +1086,11 @@ Deno.test("submit --selector calls dep correctly", async () => {
   const code = await runCli(
     ["submit", "--selector", "form"],
     stubDeps({
-      submit: (target) => {
-        receivedTarget = target;
-        return Promise.resolve({});
+      app: {
+        submit: (target) => {
+          receivedTarget = target;
+          return Promise.resolve({});
+        },
       },
       stdout: io.stdout,
     }),
@@ -1028,9 +1115,11 @@ Deno.test("submit --snapshot outputs YAML", async () => {
   const code = await runCli(
     ["submit", "--ref", "e2", "--snapshot"],
     stubDeps({
-      submit: (_target, opts) => {
-        assertEquals(opts?.includeSnapshot, true);
-        return Promise.resolve({ snapshot: { yaml: "- form\n", refs: {} } });
+      app: {
+        submit: (_target, opts) => {
+          assertEquals(opts?.includeSnapshot, true);
+          return Promise.resolve({ snapshot: { yaml: "- form\n", refs: {} } });
+        },
       },
       stdout: io.stdout,
       stderr: io.stderr,
@@ -1046,7 +1135,7 @@ Deno.test("submit reports error from dep", async () => {
   const code = await runCli(
     ["submit", "--ref", "e2"],
     stubDeps({
-      submit: () => Promise.reject(new Error("no form found")),
+      app: { submit: () => Promise.reject(new Error("no form found")) },
       stderr: io.stderr,
     }),
   );
@@ -1062,9 +1151,11 @@ Deno.test("press-key with key name calls dep correctly", async () => {
   const code = await runCli(
     ["press-key", "Enter"],
     stubDeps({
-      pressKey: (key) => {
-        receivedKey = key;
-        return Promise.resolve({});
+      app: {
+        pressKey: (key) => {
+          receivedKey = key;
+          return Promise.resolve({});
+        },
       },
       stdout: io.stdout,
     }),
@@ -1081,10 +1172,12 @@ Deno.test("press-key with --ref focuses element first", async () => {
   const code = await runCli(
     ["press-key", "Tab", "--ref", "e5"],
     stubDeps({
-      pressKey: (key, target) => {
-        receivedKey = key;
-        receivedTarget = target;
-        return Promise.resolve({});
+      app: {
+        pressKey: (key, target) => {
+          receivedKey = key;
+          receivedTarget = target;
+          return Promise.resolve({});
+        },
       },
       stdout: io.stdout,
     }),
@@ -1101,9 +1194,11 @@ Deno.test("press-key with --selector focuses element first", async () => {
   const code = await runCli(
     ["press-key", "Escape", "--selector", "#modal"],
     stubDeps({
-      pressKey: (_key, target) => {
-        receivedTarget = target;
-        return Promise.resolve({});
+      app: {
+        pressKey: (_key, target) => {
+          receivedTarget = target;
+          return Promise.resolve({});
+        },
       },
       stdout: io.stdout,
     }),
@@ -1128,9 +1223,11 @@ Deno.test("press-key --snapshot outputs YAML", async () => {
   const code = await runCli(
     ["press-key", "Enter", "--snapshot"],
     stubDeps({
-      pressKey: (_key, _target, opts) => {
-        assertEquals(opts?.includeSnapshot, true);
-        return Promise.resolve({ snapshot: { yaml: "- button\n", refs: {} } });
+      app: {
+        pressKey: (_key, _target, opts) => {
+          assertEquals(opts?.includeSnapshot, true);
+          return Promise.resolve({ snapshot: { yaml: "- button\n", refs: {} } });
+        },
       },
       stdout: io.stdout,
       stderr: io.stderr,
@@ -1146,7 +1243,7 @@ Deno.test("press-key reports error from dep", async () => {
   const code = await runCli(
     ["press-key", "Enter"],
     stubDeps({
-      pressKey: () => Promise.reject(new Error("chrome is not running")),
+      app: { pressKey: () => Promise.reject(new Error("chrome is not running")) },
       stderr: io.stderr,
     }),
   );
@@ -1163,10 +1260,12 @@ Deno.test("upload --ref with path calls dep correctly", async () => {
   const code = await runCli(
     ["upload", "--ref", "e4", "./document.pdf"],
     stubDeps({
-      upload: (target, filePath) => {
-        receivedTarget = target;
-        receivedPath = filePath;
-        return Promise.resolve({});
+      app: {
+        upload: (target, filePath) => {
+          receivedTarget = target;
+          receivedPath = filePath;
+          return Promise.resolve({});
+        },
       },
       stdout: io.stdout,
     }),
@@ -1183,9 +1282,11 @@ Deno.test("upload --selector with path calls dep correctly", async () => {
   const code = await runCli(
     ["upload", "--selector", "input[type=file]", "./photo.jpg"],
     stubDeps({
-      upload: (target) => {
-        receivedTarget = target;
-        return Promise.resolve({});
+      app: {
+        upload: (target) => {
+          receivedTarget = target;
+          return Promise.resolve({});
+        },
       },
       stdout: io.stdout,
     }),
@@ -1220,9 +1321,11 @@ Deno.test("upload --snapshot outputs YAML", async () => {
   const code = await runCli(
     ["upload", "--ref", "e4", "./photo.jpg", "--snapshot"],
     stubDeps({
-      upload: (_target, _path, opts) => {
-        assertEquals(opts?.includeSnapshot, true);
-        return Promise.resolve({ snapshot: { yaml: "- textbox\n", refs: {} } });
+      app: {
+        upload: (_target, _path, opts) => {
+          assertEquals(opts?.includeSnapshot, true);
+          return Promise.resolve({ snapshot: { yaml: "- textbox\n", refs: {} } });
+        },
       },
       stdout: io.stdout,
       stderr: io.stderr,
@@ -1238,7 +1341,7 @@ Deno.test("upload reports error from dep", async () => {
   const code = await runCli(
     ["upload", "--ref", "e4", "./photo.jpg"],
     stubDeps({
-      upload: () => Promise.reject(new Error("element is not a file input")),
+      app: { upload: () => Promise.reject(new Error("element is not a file input")) },
       stderr: io.stderr,
     }),
   );
@@ -1253,9 +1356,11 @@ Deno.test("click --on-dialog accept passes policy to dep", async () => {
   const code = await runCli(
     ["click", "--ref", "e5", "--on-dialog", "accept"],
     stubDeps({
-      click: (_target, opts) => {
-        receivedOpts = opts;
-        return Promise.resolve({});
+      app: {
+        click: (_target, opts) => {
+          receivedOpts = opts;
+          return Promise.resolve({});
+        },
       },
     }),
   );
@@ -1271,9 +1376,11 @@ Deno.test("click --on-dialog dismiss passes policy to dep", async () => {
   const code = await runCli(
     ["click", "--ref", "e5", "--on-dialog", "dismiss"],
     stubDeps({
-      click: (_target, opts) => {
-        receivedOpts = opts;
-        return Promise.resolve({});
+      app: {
+        click: (_target, opts) => {
+          receivedOpts = opts;
+          return Promise.resolve({});
+        },
       },
     }),
   );
@@ -1289,9 +1396,11 @@ Deno.test("click --on-dialog accept:answer passes prompt text", async () => {
   const code = await runCli(
     ["click", "--ref", "e5", "--on-dialog", "accept:hello"],
     stubDeps({
-      click: (_target, opts) => {
-        receivedOpts = opts;
-        return Promise.resolve({});
+      app: {
+        click: (_target, opts) => {
+          receivedOpts = opts;
+          return Promise.resolve({});
+        },
       },
     }),
   );
@@ -1307,9 +1416,11 @@ Deno.test("navigate --on-dialog accept passes policy", async () => {
   const code = await runCli(
     ["navigate", "https://example.com", "--on-dialog", "accept"],
     stubDeps({
-      navigate: (_url, opts) => {
-        receivedOpts = opts;
-        return Promise.resolve({});
+      app: {
+        navigate: (_url, opts) => {
+          receivedOpts = opts;
+          return Promise.resolve({});
+        },
       },
     }),
   );
@@ -1325,9 +1436,11 @@ Deno.test("fill --on-dialog dismiss passes policy", async () => {
   const code = await runCli(
     ["fill", "--ref", "e3", "hello", "--on-dialog", "dismiss"],
     stubDeps({
-      fill: (_target, _value, opts) => {
-        receivedOpts = opts;
-        return Promise.resolve({});
+      app: {
+        fill: (_target, _value, opts) => {
+          receivedOpts = opts;
+          return Promise.resolve({});
+        },
       },
     }),
   );

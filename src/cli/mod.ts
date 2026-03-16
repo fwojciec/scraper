@@ -1,48 +1,16 @@
 // Adapter: CLI (Deno.args). Direct CDP operations, no HTTP server.
 
 import type {
-  ActionOptions,
   ActionResult,
   DialogPolicy,
   ElementTarget,
-  PageInfo,
-  SnapshotOptions,
-  SnapshotResult,
-  WaitOptions,
+  ScraperApp,
+  WaitRequest,
 } from "../domain/mod.ts";
-
-/** Result of starting Chrome. */
-export interface StartResult {
-  status: "started" | "already_running" | "attached";
-  chromePid?: number;
-  cdpPort: number;
-}
-
-/** Options for the start command. */
-export interface StartOptions {
-  chromePath?: string;
-  attach?: boolean;
-  channel?: string;
-}
 
 /** Dependencies injected from main.ts composition root. */
 export interface CliDeps {
-  startChrome(opts: StartOptions): Promise<StartResult>;
-  stopChrome(): Promise<void>;
-  navigate(url: string, opts?: ActionOptions): Promise<ActionResult>;
-  snapshot(opts: SnapshotOptions): Promise<SnapshotResult>;
-  evaluate(expression: string): Promise<{ result: unknown }>;
-  screenshot(fullPage?: boolean): Promise<string>;
-  listPages(): Promise<PageInfo[]>;
-  selectPage(pageId: string): Promise<void>;
-  click(target: ElementTarget, opts?: ActionOptions): Promise<ActionResult>;
-  fill(target: ElementTarget, value: string, opts?: ActionOptions): Promise<ActionResult>;
-  wait(opts: WaitOptions): Promise<void>;
-  type(target: ElementTarget, text: string, opts?: ActionOptions): Promise<ActionResult>;
-  selectOption(target: ElementTarget, value: string, opts?: ActionOptions): Promise<ActionResult>;
-  submit(target: ElementTarget, opts?: ActionOptions): Promise<ActionResult>;
-  pressKey(key: string, target?: ElementTarget, opts?: ActionOptions): Promise<ActionResult>;
-  upload(target: ElementTarget, filePath: string, opts?: ActionOptions): Promise<ActionResult>;
+  app: ScraperApp;
   stdout(s: string): void;
   stderr(s: string): void;
 }
@@ -175,7 +143,7 @@ async function handleStart(args: string[], deps: CliDeps): Promise<number> {
   const channel = flagString(flags, "channel");
 
   try {
-    const result = await deps.startChrome({ chromePath, attach, channel });
+    const result = await deps.app.start({ chromePath, attach, channel });
     if (result.status === "already_running") {
       if (result.chromePid) {
         deps.stdout(`chrome already running (pid ${result.chromePid})\n`);
@@ -202,7 +170,7 @@ async function handleStart(args: string[], deps: CliDeps): Promise<number> {
 
 async function handleStop(deps: CliDeps): Promise<number> {
   try {
-    await deps.stopChrome();
+    await deps.app.stop();
     deps.stdout("chrome stopped\n");
     return 0;
   } catch (err) {
@@ -227,7 +195,7 @@ async function handleNavigate(args: string[], deps: CliDeps): Promise<number> {
   }
 
   try {
-    const result = await deps.navigate(url, { includeSnapshot, onDialog });
+    const result = await deps.app.navigate(url, { includeSnapshot, onDialog });
     if (result.snapshot) {
       outputActionResult(result, `navigated to ${url}`, deps);
     } else {
@@ -255,7 +223,7 @@ async function handleSnapshot(args: string[], deps: CliDeps): Promise<number> {
   const selector = flagString(flags, "selector");
 
   try {
-    const result = await deps.snapshot({ maxDepth, maxNodes, selector });
+    const result = await deps.app.snapshot({ maxDepth, maxNodes, selector });
     deps.stdout(result.yaml);
     return 0;
   } catch (err) {
@@ -273,7 +241,7 @@ async function handleEval(args: string[], deps: CliDeps): Promise<number> {
   }
 
   try {
-    const { result } = await deps.evaluate(expression);
+    const { result } = await deps.app.evaluate(expression);
     deps.stdout(JSON.stringify(result, null, 2) + "\n");
     return 0;
   } catch (err) {
@@ -287,7 +255,7 @@ async function handleScreenshot(args: string[], deps: CliDeps): Promise<number> 
   const fullPage = flagBoolean(flags, "full-page");
 
   try {
-    const path = await deps.screenshot(fullPage || undefined);
+    const path = await deps.app.screenshot(fullPage || undefined);
     deps.stdout(path + "\n");
     return 0;
   } catch (err) {
@@ -298,7 +266,7 @@ async function handleScreenshot(args: string[], deps: CliDeps): Promise<number> 
 
 async function handlePages(deps: CliDeps): Promise<number> {
   try {
-    const pages = await deps.listPages();
+    const pages = await deps.app.pages();
     if (pages.length === 0) {
       deps.stdout("no open tabs\n");
       return 0;
@@ -323,7 +291,7 @@ async function handlePage(args: string[], deps: CliDeps): Promise<number> {
   }
 
   try {
-    await deps.selectPage(pageId);
+    await deps.app.selectPage(pageId);
     deps.stdout(`switched to page ${pageId}\n`);
     return 0;
   } catch (err) {
@@ -348,7 +316,7 @@ async function handleClick(args: string[], deps: CliDeps): Promise<number> {
   }
 
   try {
-    const result = await deps.click(target!, { includeSnapshot, onDialog });
+    const result = await deps.app.click(target!, { includeSnapshot, onDialog });
     const label = "ref" in target! ? `ref ${target!.ref}` : `selector "${target!.selector}"`;
     if (result.snapshot) {
       outputActionResult(result, `clicked ${label}`, deps);
@@ -386,7 +354,7 @@ async function handleFill(args: string[], deps: CliDeps): Promise<number> {
   }
 
   try {
-    const result = await deps.fill(target!, value, { includeSnapshot, onDialog });
+    const result = await deps.app.fill(target!, value, { includeSnapshot, onDialog });
     const label = "ref" in target! ? `ref ${target!.ref}` : `selector "${target!.selector}"`;
     if (result.snapshot) {
       outputActionResult(result, `filled ${label}`, deps);
@@ -431,21 +399,28 @@ async function handleWait(args: string[], deps: CliDeps): Promise<number> {
     return 1;
   }
 
-  const target: import("../domain/mod.ts").ElementTarget | undefined = ref
-    ? { ref }
-    : selector
-    ? { selector }
-    : undefined;
+  // Build discriminated WaitRequest from flags
+  let request: WaitRequest;
+  if (text && (ref || selector)) {
+    const target: ElementTarget = ref ? { ref } : { selector: selector! };
+    request = { kind: "textInElement", target, text, timeoutMs };
+  } else if (text) {
+    request = { kind: "text", text, timeoutMs };
+  } else {
+    request = { kind: "selector", selector: selector!, timeoutMs };
+  }
 
   try {
-    await deps.wait({ target, text, timeoutMs });
-    if (text && target) {
-      const label = "ref" in target ? `ref ${target.ref}` : `selector "${target.selector}"`;
-      deps.stdout(`found text "${text}" in ${label}\n`);
-    } else if (text) {
-      deps.stdout(`found text "${text}"\n`);
-    } else if (target && "selector" in target) {
-      deps.stdout(`found element matching "${target.selector}"\n`);
+    await deps.app.wait(request);
+    if (request.kind === "textInElement") {
+      const label = "ref" in request.target
+        ? `ref ${request.target.ref}`
+        : `selector "${request.target.selector}"`;
+      deps.stdout(`found text "${request.text}" in ${label}\n`);
+    } else if (request.kind === "text") {
+      deps.stdout(`found text "${request.text}"\n`);
+    } else {
+      deps.stdout(`found element matching "${request.selector}"\n`);
     }
     return 0;
   } catch (err) {
@@ -478,7 +453,7 @@ async function handleType(args: string[], deps: CliDeps): Promise<number> {
   }
 
   try {
-    const result = await deps.type(target!, text, { includeSnapshot, onDialog });
+    const result = await deps.app.type(target!, text, { includeSnapshot, onDialog });
     const label = "ref" in target! ? `ref ${target!.ref}` : `selector "${target!.selector}"`;
     if (result.snapshot) {
       outputActionResult(result, `typed into ${label}`, deps);
@@ -516,7 +491,7 @@ async function handleSelect(args: string[], deps: CliDeps): Promise<number> {
   }
 
   try {
-    const result = await deps.selectOption(target!, value, { includeSnapshot, onDialog });
+    const result = await deps.app.selectOption(target!, value, { includeSnapshot, onDialog });
     const label = "ref" in target! ? `ref ${target!.ref}` : `selector "${target!.selector}"`;
     if (result.snapshot) {
       outputActionResult(result, `selected "${value}" in ${label}`, deps);
@@ -548,7 +523,7 @@ async function handleSubmit(args: string[], deps: CliDeps): Promise<number> {
   }
 
   try {
-    const result = await deps.submit(target!, { includeSnapshot, onDialog });
+    const result = await deps.app.submit(target!, { includeSnapshot, onDialog });
     const label = "ref" in target! ? `ref ${target!.ref}` : `selector "${target!.selector}"`;
     if (result.snapshot) {
       outputActionResult(result, `submitted ${label}`, deps);
@@ -590,7 +565,7 @@ async function handlePressKey(args: string[], deps: CliDeps): Promise<number> {
   }
 
   try {
-    const result = await deps.pressKey(key, target, { includeSnapshot, onDialog });
+    const result = await deps.app.pressKey(key, target, { includeSnapshot, onDialog });
     let statusLine: string;
     if (target) {
       const label = "ref" in target ? `ref ${target.ref}` : `selector "${target.selector}"`;
@@ -636,7 +611,7 @@ async function handleUpload(args: string[], deps: CliDeps): Promise<number> {
   }
 
   try {
-    const result = await deps.upload(target!, filePath, {
+    const result = await deps.app.upload(target!, filePath, {
       includeSnapshot,
       onDialog,
     });
