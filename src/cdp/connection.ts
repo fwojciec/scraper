@@ -4,6 +4,7 @@ import type { AccessibilityNode } from "../domain/accessibility.ts";
 import type { BrowserService } from "../domain/browser.ts";
 import type { EvalResult } from "../domain/eval.ts";
 import type { PageInfo } from "../domain/page.ts";
+import { translateAXNodes } from "./accessibility.ts";
 import { createDialogHandler } from "./dialog.ts";
 import { createInputMethods } from "./input.ts";
 import { createNetworkTracker } from "./network.ts";
@@ -214,10 +215,9 @@ export async function createPageConnection(
     return path;
   }
 
-  // TODO(#32): add CDP→domain translator instead of returning raw nodes
   async function getFullAXTree(): Promise<AccessibilityNode[]> {
     const response = await cdp.Accessibility.getFullAXTree(null, sessionId);
-    return response.nodes;
+    return translateAXNodes(response.nodes);
   }
 
   async function resolveSelector(selector: string): Promise<number> {

@@ -7,7 +7,7 @@ import {
   createPageConnection,
   discoverWsUrl,
 } from "../../src/cdp/connection.ts";
-import { type AccessibilityNode, createSnapshotService } from "../../src/aria/mod.ts";
+import { createSnapshotService } from "../../src/aria/mod.ts";
 import type { SnapshotService } from "../../src/domain/browser.ts";
 import { type FixtureServer, startFixtureServer } from "./fixture-server.ts";
 
@@ -46,7 +46,7 @@ async function setup(): Promise<TestContext> {
     partial.browser = await createPageConnection(wsUrl, targetId);
     partial.snapshots = createSnapshotService({
       async getFullAXTree() {
-        return await partial.browser!.getFullAXTree() as AccessibilityNode[];
+        return await partial.browser!.getFullAXTree();
       },
       async resolveSelector(selector: string) {
         return await partial.browser!.resolveSelector(selector);
