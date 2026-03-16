@@ -1,5 +1,5 @@
 export type { AccessibilityNode, AccessibilityValue } from "./accessibility.ts";
-export type { ActionOptions, ActionResult, DialogPolicy, WaitOptions } from "./action.ts";
+export type { ActionOptions, ActionResult, DialogPolicy } from "./action.ts";
 export type { ScraperApp, StartOptions, StartResult, WaitRequest } from "./app.ts";
 export type { ElementTarget } from "./element.ts";
 export type { EvalRequest, EvalResult } from "./eval.ts";
