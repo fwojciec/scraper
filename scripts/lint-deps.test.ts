@@ -133,3 +133,62 @@ Deno.test("violation: file:// URL import caught", () => {
   assertEquals(diagnostics.length, 1);
   assertEquals(diagnostics[0].message, "aria/ cannot import from cdp/ (allowed: [domain])");
 });
+
+Deno.test("clean: app/ importing domain passes", () => {
+  const diagnostics = Deno.lint.runPlugin(
+    plugin,
+    "src/app/mod.ts",
+    `import type { ScraperApp } from "../domain/mod.ts";`,
+  );
+  assertEquals(diagnostics.length, 0);
+});
+
+Deno.test("clean: app/ importing cdp passes", () => {
+  const diagnostics = Deno.lint.runPlugin(
+    plugin,
+    "src/app/mod.ts",
+    `import type { CdpPageService } from "../cdp/mod.ts";`,
+  );
+  assertEquals(diagnostics.length, 0);
+});
+
+Deno.test("clean: app/ importing aria passes", () => {
+  const diagnostics = Deno.lint.runPlugin(
+    plugin,
+    "src/app/mod.ts",
+    `import { createSnapshotService } from "../aria/mod.ts";`,
+  );
+  assertEquals(diagnostics.length, 0);
+});
+
+Deno.test("clean: app/ importing fs passes", () => {
+  const diagnostics = Deno.lint.runPlugin(
+    plugin,
+    "src/app/mod.ts",
+    `import type { JsonFileStore } from "../fs/mod.ts";`,
+  );
+  assertEquals(diagnostics.length, 0);
+});
+
+Deno.test("violation: app/ importing cli caught", () => {
+  const diagnostics = Deno.lint.runPlugin(
+    plugin,
+    "src/app/handler.ts",
+    `import { runCli } from "../cli/mod.ts";`,
+  );
+  assertEquals(diagnostics.length, 1);
+  assertEquals(
+    diagnostics[0].message,
+    "app/ cannot import from cli/ (allowed: [domain, cdp, aria, fs])",
+  );
+});
+
+Deno.test("violation: adapter importing app/ caught", () => {
+  const diagnostics = Deno.lint.runPlugin(
+    plugin,
+    "src/cli/handler.ts",
+    `import { createScraperApp } from "../app/mod.ts";`,
+  );
+  assertEquals(diagnostics.length, 1);
+  assertEquals(diagnostics[0].message, "cli/ cannot import from app/ (allowed: [domain])");
+});
