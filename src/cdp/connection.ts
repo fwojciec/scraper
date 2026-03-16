@@ -1,6 +1,6 @@
 /** CDP connection: browser-level and page-level connections. */
 
-import type { AXNode } from "../domain/ax.ts";
+import type { AccessibilityNode } from "../domain/accessibility.ts";
 import type { BrowserService } from "../domain/browser.ts";
 import type { EvalResult } from "../domain/eval.ts";
 import type { PageInfo } from "../domain/page.ts";
@@ -12,7 +12,7 @@ import { createWaitMethods } from "./wait.ts";
 /** Page-level CDP connection — attached to a specific target. */
 export interface CdpPageService extends BrowserService {
   close(): void;
-  getFullAXTree(): Promise<AXNode[]>;
+  getFullAXTree(): Promise<AccessibilityNode[]>;
   resolveSelector(selector: string): Promise<number>;
   /** Resolve a backendNodeId to a RemoteObjectId. Throws if stale. */
   resolveRef(backendNodeId: number, refName: string): Promise<string>;
@@ -99,7 +99,7 @@ export async function createBrowserConnection(
       .filter((t: any) => t.type === "page")
       // deno-lint-ignore no-explicit-any
       .map((t: any) => ({
-        targetId: t.targetId,
+        pageId: t.targetId,
         url: t.url,
         title: t.title,
         active: t.targetId === activeTargetId,
@@ -214,7 +214,8 @@ export async function createPageConnection(
     return path;
   }
 
-  async function getFullAXTree(): Promise<AXNode[]> {
+  // TODO(#32): add CDP→domain translator instead of returning raw nodes
+  async function getFullAXTree(): Promise<AccessibilityNode[]> {
     const response = await cdp.Accessibility.getFullAXTree(null, sessionId);
     return response.nodes;
   }

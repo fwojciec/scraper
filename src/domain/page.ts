@@ -1,3 +1,6 @@
+/** Identifier for a browser page/tab. */
+export type PageId = string;
+
 /** Request to navigate the browser to a URL. */
 export interface NavigateRequest {
   url: string;
@@ -5,7 +8,7 @@ export interface NavigateRequest {
 
 /** Info about an open browser page/tab. */
 export interface PageInfo {
-  targetId: string;
+  pageId: PageId;
   url: string;
   title: string;
   active: boolean;

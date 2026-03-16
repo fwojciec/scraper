@@ -1,27 +1,27 @@
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
-import { type AXNode, transformAXTree, type TransformResult } from "./tree.ts";
+import { type AccessibilityNode, transformAXTree, type TransformResult } from "./tree.ts";
 import { renderYaml } from "./render.ts";
 
-/** Helper: transform AXNodes and render to YAML. */
+/** Helper: transform AccessibilityNodes and render to YAML. */
 function snapshot(
-  axNodes: AXNode[],
+  axNodes: AccessibilityNode[],
   options?: { maxDepth?: number; maxNodes?: number },
 ): string {
   const { nodes } = transformAXTree(axNodes, options);
   return renderYaml(nodes);
 }
 
-/** Helper: transform AXNodes and return full result (nodes + refs). */
+/** Helper: transform AccessibilityNodes and return full result (nodes + refs). */
 function transform(
-  axNodes: AXNode[],
+  axNodes: AccessibilityNode[],
   options?: { maxDepth?: number; maxNodes?: number },
   rootNodeId?: string,
 ): TransformResult {
   return transformAXTree(axNodes, options, rootNodeId);
 }
 
-/** Helper to build a minimal AXNode. */
-function ax(overrides: Partial<AXNode> & { nodeId: string }): AXNode {
+/** Helper to build a minimal AccessibilityNode. */
+function ax(overrides: Partial<AccessibilityNode> & { nodeId: string }): AccessibilityNode {
   return {
     ignored: false,
     ...overrides,
@@ -31,7 +31,7 @@ function ax(overrides: Partial<AXNode> & { nodeId: string }): AXNode {
 // --- Basic role mapping ---
 
 Deno.test("link gets role and ref", () => {
-  const nodes: AXNode[] = [
+  const nodes: AccessibilityNode[] = [
     ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
     ax({
       nodeId: "2",
@@ -45,7 +45,7 @@ Deno.test("link gets role and ref", () => {
 });
 
 Deno.test("button gets role and ref", () => {
-  const nodes: AXNode[] = [
+  const nodes: AccessibilityNode[] = [
     ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
     ax({
       nodeId: "2",
@@ -59,7 +59,7 @@ Deno.test("button gets role and ref", () => {
 });
 
 Deno.test("heading with level preserved", () => {
-  const nodes: AXNode[] = [
+  const nodes: AccessibilityNode[] = [
     ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
     ax({
       nodeId: "2",
@@ -74,7 +74,7 @@ Deno.test("heading with level preserved", () => {
 
 Deno.test("all heading levels 1-6", () => {
   for (let i = 1; i <= 6; i++) {
-    const nodes: AXNode[] = [
+    const nodes: AccessibilityNode[] = [
       ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
       ax({
         nodeId: "2",
@@ -91,7 +91,7 @@ Deno.test("all heading levels 1-6", () => {
 // --- Table structure ---
 
 Deno.test("table structure maps to ARIA roles", () => {
-  const nodes: AXNode[] = [
+  const nodes: AccessibilityNode[] = [
     ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
     ax({ nodeId: "2", role: { type: "role", value: "table" }, childIds: ["3", "4"] }),
     ax({ nodeId: "3", role: { type: "role", value: "row" }, childIds: ["5", "6"] }),
@@ -129,7 +129,7 @@ Deno.test("table structure maps to ARIA roles", () => {
 // --- Image ---
 
 Deno.test("image with name gets img role", () => {
-  const nodes: AXNode[] = [
+  const nodes: AccessibilityNode[] = [
     ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
     ax({
       nodeId: "2",
@@ -144,7 +144,7 @@ Deno.test("image with name gets img role", () => {
 // --- Ignored and hidden ---
 
 Deno.test("ignored nodes excluded", () => {
-  const nodes: AXNode[] = [
+  const nodes: AccessibilityNode[] = [
     ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2", "3"] }),
     ax({
       nodeId: "2",
@@ -166,7 +166,7 @@ Deno.test("ignored nodes excluded", () => {
 // --- Generic/transparent elements ---
 
 Deno.test("generic elements are transparent", () => {
-  const nodes: AXNode[] = [
+  const nodes: AccessibilityNode[] = [
     ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
     ax({ nodeId: "2", role: { type: "role", value: "generic" }, childIds: ["3"] }),
     ax({
@@ -182,7 +182,7 @@ Deno.test("generic elements are transparent", () => {
 });
 
 Deno.test("none role is transparent", () => {
-  const nodes: AXNode[] = [
+  const nodes: AccessibilityNode[] = [
     ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
     ax({ nodeId: "2", role: { type: "role", value: "none" }, childIds: ["3"] }),
     ax({
@@ -198,7 +198,7 @@ Deno.test("none role is transparent", () => {
 });
 
 Deno.test("presentation role is transparent", () => {
-  const nodes: AXNode[] = [
+  const nodes: AccessibilityNode[] = [
     ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
     ax({ nodeId: "2", role: { type: "role", value: "presentation" }, childIds: ["3"] }),
     ax({
@@ -216,7 +216,7 @@ Deno.test("presentation role is transparent", () => {
 // --- Name handling ---
 
 Deno.test("explicit name (aria-label) overrides text content", () => {
-  const nodes: AXNode[] = [
+  const nodes: AccessibilityNode[] = [
     ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
     ax({
       nodeId: "2",
@@ -237,7 +237,7 @@ Deno.test("explicit name (aria-label) overrides text content", () => {
 });
 
 Deno.test("text children absorbed into parent name", () => {
-  const nodes: AXNode[] = [
+  const nodes: AccessibilityNode[] = [
     ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
     ax({
       nodeId: "2",
@@ -257,7 +257,7 @@ Deno.test("text children absorbed into parent name", () => {
 });
 
 Deno.test("semantic children shown when mixed with text", () => {
-  const nodes: AXNode[] = [
+  const nodes: AccessibilityNode[] = [
     ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
     ax({
       nodeId: "2",
@@ -291,7 +291,7 @@ Deno.test("semantic children shown when mixed with text", () => {
 
 Deno.test("explicit name with semantic children keeps both", () => {
   // <nav aria-label="Main"><a href="/">Home</a></nav>
-  const nodes: AXNode[] = [
+  const nodes: AccessibilityNode[] = [
     ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
     ax({
       nodeId: "2",
@@ -314,7 +314,7 @@ Deno.test("explicit name with semantic children keeps both", () => {
 // --- Landmark roles ---
 
 Deno.test("landmark roles preserved", () => {
-  const nodes: AXNode[] = [
+  const nodes: AccessibilityNode[] = [
     ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2", "3", "4"] }),
     ax({
       nodeId: "2",
@@ -357,7 +357,7 @@ Deno.test("landmark roles preserved", () => {
 // --- Lists ---
 
 Deno.test("list and listitem", () => {
-  const nodes: AXNode[] = [
+  const nodes: AccessibilityNode[] = [
     ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
     ax({ nodeId: "2", role: { type: "role", value: "list" }, childIds: ["3", "4"] }),
     ax({
@@ -380,7 +380,7 @@ Deno.test("list and listitem", () => {
 // --- Input types ---
 
 Deno.test("textbox gets ref", () => {
-  const nodes: AXNode[] = [
+  const nodes: AccessibilityNode[] = [
     ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
     ax({
       nodeId: "2",
@@ -393,7 +393,7 @@ Deno.test("textbox gets ref", () => {
 });
 
 Deno.test("combobox gets ref", () => {
-  const nodes: AXNode[] = [
+  const nodes: AccessibilityNode[] = [
     ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
     ax({
       nodeId: "2",
@@ -407,7 +407,7 @@ Deno.test("combobox gets ref", () => {
 });
 
 Deno.test("checkbox gets ref", () => {
-  const nodes: AXNode[] = [
+  const nodes: AccessibilityNode[] = [
     ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
     ax({
       nodeId: "2",
@@ -420,7 +420,7 @@ Deno.test("checkbox gets ref", () => {
 });
 
 Deno.test("radio gets ref", () => {
-  const nodes: AXNode[] = [
+  const nodes: AccessibilityNode[] = [
     ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
     ax({
       nodeId: "2",
@@ -435,7 +435,7 @@ Deno.test("radio gets ref", () => {
 // --- Refs ---
 
 Deno.test("refs increment sequentially", () => {
-  const nodes: AXNode[] = [
+  const nodes: AccessibilityNode[] = [
     ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2", "3", "4"] }),
     ax({
       nodeId: "2",
@@ -463,7 +463,7 @@ Deno.test("refs increment sequentially", () => {
 });
 
 Deno.test("refs map to backendDOMNodeIds", () => {
-  const nodes: AXNode[] = [
+  const nodes: AccessibilityNode[] = [
     ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2", "3"] }),
     ax({
       nodeId: "2",
@@ -485,7 +485,7 @@ Deno.test("refs map to backendDOMNodeIds", () => {
 // --- Depth and node limits ---
 
 Deno.test("maxDepth limits tree depth", () => {
-  const nodes: AXNode[] = [
+  const nodes: AccessibilityNode[] = [
     ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
     ax({ nodeId: "2", role: { type: "role", value: "navigation" }, childIds: ["3"] }),
     ax({ nodeId: "3", role: { type: "role", value: "list" }, childIds: ["4"] }),
@@ -504,7 +504,7 @@ Deno.test("maxDepth limits tree depth", () => {
 });
 
 Deno.test("maxNodes limits total nodes", () => {
-  const nodes: AXNode[] = [
+  const nodes: AccessibilityNode[] = [
     ax({
       nodeId: "1",
       role: { type: "role", value: "RootWebArea" },
@@ -544,7 +544,7 @@ Deno.test("maxNodes limits total nodes", () => {
 // --- Root node selection ---
 
 Deno.test("rootNodeId scopes transform to subtree", () => {
-  const nodes: AXNode[] = [
+  const nodes: AccessibilityNode[] = [
     ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2", "3"] }),
     ax({
       nodeId: "2",
@@ -567,7 +567,7 @@ Deno.test("rootNodeId scopes transform to subtree", () => {
 // --- StaticText / InlineTextBox ---
 
 Deno.test("StaticText becomes text pseudo-node", () => {
-  const nodes: AXNode[] = [
+  const nodes: AccessibilityNode[] = [
     ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
     ax({ nodeId: "2", role: { type: "role", value: "paragraph" }, childIds: ["3", "4"] }),
     ax({
@@ -588,7 +588,7 @@ Deno.test("StaticText becomes text pseudo-node", () => {
 });
 
 Deno.test("InlineTextBox is skipped", () => {
-  const nodes: AXNode[] = [
+  const nodes: AccessibilityNode[] = [
     ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
     ax({
       nodeId: "2",
@@ -612,7 +612,7 @@ Deno.test("InlineTextBox is skipped", () => {
 // --- Explicit roles ---
 
 Deno.test("explicit alert role preserved", () => {
-  const nodes: AXNode[] = [
+  const nodes: AccessibilityNode[] = [
     ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
     ax({
       nodeId: "2",
@@ -625,7 +625,7 @@ Deno.test("explicit alert role preserved", () => {
 });
 
 Deno.test("region with name", () => {
-  const nodes: AXNode[] = [
+  const nodes: AccessibilityNode[] = [
     ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
     ax({
       nodeId: "2",
@@ -644,7 +644,7 @@ Deno.test("region with name", () => {
 });
 
 Deno.test("form with name", () => {
-  const nodes: AXNode[] = [
+  const nodes: AccessibilityNode[] = [
     ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
     ax({
       nodeId: "2",
@@ -665,7 +665,7 @@ Deno.test("form with name", () => {
 // --- Rowgroup ---
 
 Deno.test("rowgroup roles preserved", () => {
-  const nodes: AXNode[] = [
+  const nodes: AccessibilityNode[] = [
     ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
     ax({ nodeId: "2", role: { type: "role", value: "table" }, childIds: ["3", "4", "5"] }),
     ax({ nodeId: "3", role: { type: "role", value: "rowgroup" }, childIds: ["6"] }),
@@ -696,7 +696,7 @@ Deno.test("rowgroup roles preserved", () => {
 
 // --- Empty tree ---
 
-Deno.test("empty AXNode array produces empty result", () => {
+Deno.test("empty AccessibilityNode array produces empty result", () => {
   const result = transform([]);
   assertEquals(result.nodes, []);
   assertEquals(result.refs, {});
@@ -705,7 +705,7 @@ Deno.test("empty AXNode array produces empty result", () => {
 // --- Cell with link child ---
 
 Deno.test("cell with link child preserves link", () => {
-  const nodes: AXNode[] = [
+  const nodes: AccessibilityNode[] = [
     ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
     ax({ nodeId: "2", role: { type: "role", value: "table" }, childIds: ["3"] }),
     ax({ nodeId: "3", role: { type: "role", value: "row" }, childIds: ["4"] }),
@@ -730,7 +730,7 @@ Deno.test("cell with link child preserves link", () => {
 // --- Article / complementary ---
 
 Deno.test("article role preserved", () => {
-  const nodes: AXNode[] = [
+  const nodes: AccessibilityNode[] = [
     ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
     ax({
       nodeId: "2",
@@ -748,7 +748,7 @@ Deno.test("article role preserved", () => {
 });
 
 Deno.test("complementary role preserved", () => {
-  const nodes: AXNode[] = [
+  const nodes: AccessibilityNode[] = [
     ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
     ax({
       nodeId: "2",
@@ -768,7 +768,7 @@ Deno.test("complementary role preserved", () => {
 // --- Ignored nodes with visible children ---
 
 Deno.test("ignored node's children still processed", () => {
-  const nodes: AXNode[] = [
+  const nodes: AccessibilityNode[] = [
     ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
     ax({
       nodeId: "2",

@@ -403,8 +403,8 @@ Deno.test("pages lists open tabs", async () => {
     stubDeps({
       listPages: () =>
         Promise.resolve([
-          { targetId: "abc", url: "https://example.com", title: "Example", active: true },
-          { targetId: "def", url: "about:blank", title: "", active: false },
+          { pageId: "abc", url: "https://example.com", title: "Example", active: true },
+          { pageId: "def", url: "about:blank", title: "", active: false },
         ]),
       stdout: io.stdout,
     }),
@@ -461,11 +461,11 @@ Deno.test("page switches active tab", async () => {
   assertStringIncludes(io.out, "switched to page abc-123");
 });
 
-Deno.test("page without targetId returns error", async () => {
+Deno.test("page without pageId returns error", async () => {
   const io = capture();
   const code = await runCli(["page"], stubDeps({ stderr: io.stderr }));
   assertEquals(code, 1);
-  assertStringIncludes(io.err, "targetId is required");
+  assertStringIncludes(io.err, "pageId is required");
 });
 
 Deno.test("page reports error from dep", async () => {
@@ -473,12 +473,12 @@ Deno.test("page reports error from dep", async () => {
   const code = await runCli(
     ["page", "abc-123"],
     stubDeps({
-      selectPage: () => Promise.reject(new Error("no page with targetId")),
+      selectPage: () => Promise.reject(new Error("no page with id")),
       stderr: io.stderr,
     }),
   );
   assertEquals(code, 1);
-  assertStringIncludes(io.err, "no page with targetId");
+  assertStringIncludes(io.err, "no page with id");
 });
 
 // --- click ---

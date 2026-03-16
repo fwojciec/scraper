@@ -8,8 +8,8 @@ invalid states are encoded out of the type system where practical, and `main.ts`
 thin composition root.
 
 **Architecture:** Introduce project-owned domain types for browser concepts (`PageId`, `RefToken`,
-`DomNodeHandle`, `AccessibilityNode`), move raw CDP protocol shapes behind `cdp/` translation, add
-a proper application-layer interface (`ScraperApp`) for the real use cases the CLI invokes, and
+`DomNodeHandle`, `AccessibilityNode`), move raw CDP protocol shapes behind `cdp/` translation, add a
+proper application-layer interface (`ScraperApp`) for the real use cases the CLI invokes, and
 implement that interface in a new `app/` orchestration layer. `cli/` depends on the application
 interface and output sinks only; `aria/` consumes project-owned accessibility types; `fs/` remains
 the persistence adapter; `main.ts` wires the graph. The dependency boundary lint rule is updated so
@@ -157,9 +157,9 @@ This removes cases like `{ target: { ref } }` without text from the domain entir
 
 ### 4. Dead abstractions are removed, not preserved
 
-Request DTOs that are not used (`EvalRequest`, `NavigateRequest`) and placeholder service
-interfaces that no longer represent the system (`BrowserService`, `SnapshotService`) should be
-deleted once the new application contract is live.
+Request DTOs that are not used (`EvalRequest`, `NavigateRequest`) and placeholder service interfaces
+that no longer represent the system (`BrowserService`, `SnapshotService`) should be deleted once the
+new application contract is live.
 
 ---
 
@@ -206,8 +206,7 @@ shapes.
 **Acceptance criteria**
 
 - `src/domain/` no longer exports `AXNode` or `AXValue`.
-- Domain consumers compile using `PageId`, `RefToken`, `DomNodeHandle`, and
-  `AccessibilityNode`.
+- Domain consumers compile using `PageId`, `RefToken`, `DomNodeHandle`, and `AccessibilityNode`.
 
 ---
 
@@ -249,8 +248,8 @@ export interface CdpAXNode {
 
 **Step 2: Add a translation seam**
 
-Create a small translator in `cdp/` from `CdpAXNode` to `AccessibilityNode`. Keep it mechanical.
-The translator should be the only place that knows:
+Create a small translator in `cdp/` from `CdpAXNode` to `AccessibilityNode`. Keep it mechanical. The
+translator should be the only place that knows:
 
 - `nodeId` maps to `AccessibilityNode.id`
 - `backendDOMNodeId` maps to `domNode`
@@ -292,8 +291,8 @@ Move or add these types under `domain/`:
 `StartOptions` and `StartResult` currently live in `cli/` but they describe application behavior,
 not CLI parsing.
 
-Add `WaitRequest` here as part of the application contract so `ScraperApp.wait()` does not depend
-on a type introduced later in the plan. Task 5 will complete the migration from `WaitOptions` to
+Add `WaitRequest` here as part of the application contract so `ScraperApp.wait()` does not depend on
+a type introduced later in the plan. Task 5 will complete the migration from `WaitOptions` to
 `WaitRequest` across all call sites.
 
 **Step 2: Narrow the CLI boundary**

@@ -430,18 +430,18 @@ async function listPages(): Promise<PageInfo[]> {
   });
 }
 
-async function selectPage(targetId: string): Promise<void> {
+async function selectPage(pageId: string): Promise<void> {
   await withBrowserConnection(async (browser, state) => {
     // Verify the target exists
     const pages = await browser.listPages();
-    const found = pages.find((p) => p.targetId === targetId);
+    const found = pages.find((p) => p.pageId === pageId);
     if (!found) {
-      throw new Error(`no page with targetId '${targetId}' — run 'scraper pages' to list tabs`);
+      throw new Error(`no page with id '${pageId}' — run 'scraper pages' to list tabs`);
     }
 
     // Update state with new targetId — safe for single-user CLI; concurrent
     // processes sharing the same state file could overwrite each other.
-    await stateStore.write({ ...state, targetId });
+    await stateStore.write({ ...state, targetId: pageId });
     // Old refs are meaningless for the new page
     await refsStore.remove();
   });

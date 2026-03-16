@@ -1,12 +1,12 @@
 /** SnapshotService: uses CDP Accessibility tree to build ARIA snapshots. */
 
 import type { SnapshotService } from "../domain/browser.ts";
-import { type AXNode, transformAXTree } from "./tree.ts";
+import { type AccessibilityNode, transformAXTree } from "./tree.ts";
 import { renderYaml } from "./render.ts";
 
 /** Dependencies for the snapshot service, provided by the CDP adapter. */
 export interface SnapshotDeps {
-  getFullAXTree(): Promise<AXNode[]>;
+  getFullAXTree(): Promise<AccessibilityNode[]>;
   resolveSelector(selector: string): Promise<number>;
 }
 

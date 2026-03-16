@@ -1,12 +1,12 @@
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
-import { type AXNode } from "./tree.ts";
+import { type AccessibilityNode } from "./tree.ts";
 import { createSnapshotService, type SnapshotDeps } from "./snapshot.ts";
 
-function ax(overrides: Partial<AXNode> & { nodeId: string }): AXNode {
+function ax(overrides: Partial<AccessibilityNode> & { nodeId: string }): AccessibilityNode {
   return { ignored: false, ...overrides };
 }
 
-function mockDeps(axNodes: AXNode[], overrides?: Partial<SnapshotDeps>): SnapshotDeps {
+function mockDeps(axNodes: AccessibilityNode[], overrides?: Partial<SnapshotDeps>): SnapshotDeps {
   return {
     getFullAXTree: () => Promise.resolve(axNodes),
     resolveSelector: () => Promise.reject(new Error("resolveSelector not mocked")),
@@ -14,8 +14,8 @@ function mockDeps(axNodes: AXNode[], overrides?: Partial<SnapshotDeps>): Snapsho
   };
 }
 
-Deno.test("snapshot returns YAML from AXNodes", async () => {
-  const axNodes: AXNode[] = [
+Deno.test("snapshot returns YAML from AccessibilityNodes", async () => {
+  const axNodes: AccessibilityNode[] = [
     ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
     ax({
       nodeId: "2",
@@ -36,7 +36,7 @@ Deno.test("snapshot returns YAML from AXNodes", async () => {
 });
 
 Deno.test("snapshot returns refs", async () => {
-  const axNodes: AXNode[] = [
+  const axNodes: AccessibilityNode[] = [
     ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
     ax({
       nodeId: "2",
@@ -51,7 +51,7 @@ Deno.test("snapshot returns refs", async () => {
 });
 
 Deno.test("snapshot returns empty YAML for empty tree", async () => {
-  const axNodes: AXNode[] = [
+  const axNodes: AccessibilityNode[] = [
     ax({ nodeId: "1", ignored: true, role: { type: "role", value: "RootWebArea" } }),
   ];
   const svc = createSnapshotService(mockDeps(axNodes));
@@ -61,7 +61,7 @@ Deno.test("snapshot returns empty YAML for empty tree", async () => {
 });
 
 Deno.test("snapshot uses selector to scope subtree", async () => {
-  const axNodes: AXNode[] = [
+  const axNodes: AccessibilityNode[] = [
     ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2", "3"] }),
     ax({
       nodeId: "2",
@@ -92,7 +92,7 @@ Deno.test("snapshot uses selector to scope subtree", async () => {
 });
 
 Deno.test("snapshot respects maxDepth", async () => {
-  const axNodes: AXNode[] = [
+  const axNodes: AccessibilityNode[] = [
     ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
     ax({ nodeId: "2", role: { type: "role", value: "navigation" }, childIds: ["3"] }),
     ax({ nodeId: "3", role: { type: "role", value: "list" }, childIds: ["4"] }),
@@ -111,7 +111,7 @@ Deno.test("snapshot respects maxDepth", async () => {
 });
 
 Deno.test("snapshot respects maxNodes", async () => {
-  const axNodes: AXNode[] = [
+  const axNodes: AccessibilityNode[] = [
     ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2", "3", "4"] }),
     ax({
       nodeId: "2",
@@ -140,7 +140,7 @@ Deno.test("snapshot respects maxNodes", async () => {
 });
 
 Deno.test("snapshot returns empty for unmatched selector", async () => {
-  const axNodes: AXNode[] = [
+  const axNodes: AccessibilityNode[] = [
     ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
     ax({
       nodeId: "2",

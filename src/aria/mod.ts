@@ -1,7 +1,7 @@
 // Adapter: CDP Accessibility tree → ARIA snapshot.
 export {
+  type AccessibilityNode,
   type AriaNode,
-  type AXNode,
   transformAXTree,
   type TransformResult,
   type TreeOptions,

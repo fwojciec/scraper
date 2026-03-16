@@ -1,9 +1,9 @@
-/** AXNode→AriaNode transformer. Converts Chrome CDP Accessibility tree to our AriaNode format. */
+/** AccessibilityNode→AriaNode transformer. Converts CDP accessibility tree nodes to our AriaNode format. */
 
-import type { AXNode, AXValue } from "../domain/ax.ts";
+import type { AccessibilityNode, AccessibilityValue } from "../domain/accessibility.ts";
 import type { RefMap } from "../domain/snapshot.ts";
 
-export type { AXNode, AXValue };
+export type { AccessibilityNode, AccessibilityValue };
 
 /** ARIA node in the accessibility tree. */
 export interface AriaNode {
@@ -49,12 +49,12 @@ interface BuildContext {
 }
 
 function transformNode(
-  ax: AXNode,
+  ax: AccessibilityNode,
   depth: number,
   maxDepth: number,
   ctx: BuildContext,
   refs: RefMap,
-  lookup: Map<string, AXNode>,
+  lookup: Map<string, AccessibilityNode>,
 ): AriaNode[] {
   if (ctx.nodeCount >= ctx.maxNodes) return [];
 
@@ -142,12 +142,12 @@ function transformNode(
 }
 
 function transformChildren(
-  ax: AXNode,
+  ax: AccessibilityNode,
   depth: number,
   maxDepth: number,
   ctx: BuildContext,
   refs: RefMap,
-  lookup: Map<string, AXNode>,
+  lookup: Map<string, AccessibilityNode>,
 ): AriaNode[] {
   const results: AriaNode[] = [];
   if (!ax.childIds) return results;
@@ -163,16 +163,16 @@ function transformChildren(
   return results;
 }
 
-/** Transform a flat CDP AXNode array into an AriaNode tree with ref mapping. */
+/** Transform a flat AccessibilityNode array into an AriaNode tree with ref mapping. */
 export function transformAXTree(
-  axNodes: AXNode[],
+  axNodes: AccessibilityNode[],
   options?: TreeOptions,
   rootNodeId?: string,
 ): TransformResult {
   if (axNodes.length === 0) return { nodes: [], refs: {} };
 
-  // Build lookup: nodeId → AXNode
-  const lookup = new Map<string, AXNode>();
+  // Build lookup: nodeId → AccessibilityNode
+  const lookup = new Map<string, AccessibilityNode>();
   for (const node of axNodes) {
     lookup.set(node.nodeId, node);
   }

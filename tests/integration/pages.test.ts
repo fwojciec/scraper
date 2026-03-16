@@ -113,7 +113,7 @@ Deno.test("page switch and navigate work across tabs", async () => {
   }
 });
 
-Deno.test("page with invalid targetId returns error", async () => {
+Deno.test("page with invalid pageId returns error", async () => {
   const tmpHome = await Deno.makeTempDir();
   const env = { ...Deno.env.toObject(), HOME: tmpHome, DENO_DIR: await denoDir() };
 
@@ -123,7 +123,7 @@ Deno.test("page with invalid targetId returns error", async () => {
 
     const page = await runScraper(["page", "nonexistent-id"], env);
     assertEquals(page.code, 1);
-    assertStringIncludes(page.stderr, "no page with targetId");
+    assertStringIncludes(page.stderr, "no page with id");
 
     const stop = await runScraper(["stop"], env);
     assertEquals(stop.code, 0, `stop failed: ${stop.stderr}`);

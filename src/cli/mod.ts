@@ -34,7 +34,7 @@ export interface CliDeps {
   evaluate(expression: string): Promise<{ result: unknown }>;
   screenshot(fullPage?: boolean): Promise<string>;
   listPages(): Promise<PageInfo[]>;
-  selectPage(targetId: string): Promise<void>;
+  selectPage(pageId: string): Promise<void>;
   click(target: ElementTarget, opts?: ActionOptions): Promise<ActionResult>;
   fill(target: ElementTarget, value: string, opts?: ActionOptions): Promise<ActionResult>;
   wait(opts: WaitOptions): Promise<void>;
@@ -305,7 +305,7 @@ async function handlePages(deps: CliDeps): Promise<number> {
     }
     for (const page of pages) {
       const marker = page.active ? "* " : "  ";
-      deps.stdout(`${marker}${page.targetId}  ${page.title}  ${page.url}\n`);
+      deps.stdout(`${marker}${page.pageId}  ${page.title}  ${page.url}\n`);
     }
     return 0;
   } catch (err) {
@@ -316,15 +316,15 @@ async function handlePages(deps: CliDeps): Promise<number> {
 
 async function handlePage(args: string[], deps: CliDeps): Promise<number> {
   const { positional } = parseFlags(args);
-  const targetId = positional[0];
-  if (!targetId) {
-    deps.stderr("error: targetId is required\nUsage: scraper page <targetId>\n");
+  const pageId = positional[0];
+  if (!pageId) {
+    deps.stderr("error: pageId is required\nUsage: scraper page <pageId>\n");
     return 1;
   }
 
   try {
-    await deps.selectPage(targetId);
-    deps.stdout(`switched to page ${targetId}\n`);
+    await deps.selectPage(pageId);
+    deps.stdout(`switched to page ${pageId}\n`);
     return 0;
   } catch (err) {
     deps.stderr(`error: ${err instanceof Error ? err.message : err}\n`);
