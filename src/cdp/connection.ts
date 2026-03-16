@@ -1,7 +1,6 @@
 /** CDP connection: browser-level and page-level connections. */
 
 import type { AccessibilityNode } from "../domain/accessibility.ts";
-import type { BrowserService } from "../domain/browser.ts";
 import type { EvalResult } from "../domain/eval.ts";
 import type { PageInfo } from "../domain/page.ts";
 import { translateAXNodes } from "./accessibility.ts";
@@ -11,7 +10,10 @@ import { createNetworkTracker } from "./network.ts";
 import { createWaitMethods } from "./wait.ts";
 
 /** Page-level CDP connection — attached to a specific target. */
-export interface CdpPageService extends BrowserService {
+export interface CdpPageService {
+  navigate(url: string): Promise<void>;
+  evaluate(expression: string): Promise<EvalResult>;
+  screenshot(fullPage?: boolean): Promise<string>;
   close(): void;
   getFullAXTree(): Promise<AccessibilityNode[]>;
   resolveSelector(selector: string): Promise<number>;

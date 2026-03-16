@@ -1,4 +1,4 @@
-// Adapter: Chrome DevTools Protocol. Implements BrowserService.
+// Adapter: Chrome DevTools Protocol.
 export { type ChromeProcess, killChrome, launchChrome, type LaunchOptions } from "./chrome.ts";
 export {
   buildBrowserWsUrl,
