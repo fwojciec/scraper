@@ -36,13 +36,15 @@ user Chrome instances. Text-first, not pixel-first.
 **In:** A thin CLI over Chrome DevTools Protocol with:
 
 - Attach-only to the user's running Chrome (no owned launch mode)
-- Foreground-tab implicit addressing (no persisted page selection)
+- A single persisted active-target pointer (one `targetId` in `refs.json`), switched
+  only by explicit `scraper tab <ref>`
 - ARIA snapshots written to disk, returned as pointers
 - Arbitrary JS evaluation against snapshot-identified elements
 - File upload (CDP `DOM.setFileInputFiles` — the one thing JS can't do)
-- Selector/text waits, screenshots, tab switching
+- Selector/text waits, screenshots, tab switching, explicit new-tab opening
 
-**Out:** Owned Chrome launch, headless mode, stop command, page-selection state,
+**Out:** Owned Chrome launch, headless mode, stop command, multi-mode Chrome state
+(`OwnedState`/`AttachedState` union, ownership classification, PID tracking),
 semantic action commands (`click`/`fill`/`type`/`select`/`submit`/`press-key`),
 per-action `DialogPolicy` plumbing, self-healing helper files, form-helper stdlib
 (deferred until observed repetition justifies it), frames/iframes, shadow DOM, drag
@@ -52,7 +54,7 @@ and drop, network interception, cookie manipulation.
 
 | Command | Purpose | Auto-snapshot? |
 |---|---|---|
-| `scraper navigate <url>` | Navigate active tab (or open one). Waits for network idle. | **Yes** |
+| `scraper navigate <url>` | Navigate active tab. `--new` opens a new tab via `Target.createTarget` and makes it active. Waits for network idle. | **Yes** |
 | `scraper snapshot` | Capture ARIA tree + tabs + dialog state. | — (it *is* the snapshot) |
 | `scraper eval '<expr>'` | Evaluate JS in the page with `$ref(id)` helper bound. | **No** |
 | `scraper wait ...` | Wait for selector, text, or text-in-ref. | **Yes** on success |
@@ -224,13 +226,20 @@ key so the agent observes that it happened and can retry with an explicit accept
 if needed.
 
 **Observability scope (narrow).** Dialog detection is a per-CDP-connection event
-listener (`src/cdp/dialog.ts`). Because Tier B opens a fresh CDP connection per
+listener (`src/cdp/dialog.ts`) that only fires for `javascriptDialogOpening` events
+while the listener is registered. Because Tier B opens a fresh CDP connection per
 command, `dialog:` in a snapshot reflects **only dialogs that opened during the
-current command's execution**, not dialogs that opened between commands. Dialogs
-that popped while no scraper command was running will still be pending in Chrome —
-the next command that tries to interact with the page will observe that pending
-dialog (Chrome blocks page interaction until it's handled) and apply the same
-default-dismiss behavior, surfacing the text in that command's snapshot.
+current command's execution**.
+
+**Known limitation — inter-command dialogs.** Dialogs that opened between commands
+(when no scraper process was attached) are not observed: CDP does not replay missed
+`javascriptDialogOpening` events on reattach, and we do not probe for pending
+dialogs at attach time. Such a dialog remains pending in Chrome and may cause the
+next command to block or error on page interaction. Recovery is manual: the user
+dismisses it in the browser, or the agent issues
+`scraper eval 'void 0' --on-dialog dismiss` repeatedly until the page is responsive.
+A pending-dialog probe at attach time is a plausible future addition if this turns
+out to bite in practice.
 
 **Override flag** (single, simple):
 
@@ -304,7 +313,7 @@ Three kinds, unified behind one command (unchanged from current):
 ```
 scraper wait --selector "#submit"           # CSS selector appears
 scraper wait --text "Thank you"             # text appears anywhere
-scraper wait --ref R8 --text "Loaded"       # text appears within ref
+scraper wait --ref e8 --text "Loaded"       # text appears within ref
 ```
 
 All wait kinds auto-snapshot on success. Failure throws with a clear timeout message.
@@ -342,22 +351,25 @@ lifecycle management.
 
 ## Eval Plumbing
 
-When an eval expression contains `$ref("Rn")` calls, the CLI:
+When an eval expression contains `$ref("eN")` calls, the CLI:
 
-1. Reads `refs.json` for the current snapshot's ref-to-backendNodeId map.
-2. For each distinct ref in the expression, resolves `backendNodeId` to a live
-   `objectId` via CDP `DOM.resolveNode`.
-3. Passes the expression to CDP `Runtime.callFunctionOn` with the resolved nodes
+1. Reads `refs.json` for the current ref-to-backendNodeId map.
+2. For each distinct ref in the expression, verifies it is present in `refs.json`
+   (stale-ref check — monotonic counter means a ref not in the map was generated
+   by a previous snapshot and is unambiguously stale).
+3. Resolves each `backendNodeId` to a live `objectId` via CDP `DOM.resolveNode`.
+4. Passes the expression to CDP `Runtime.callFunctionOn` with the resolved nodes
    bound as arguments, and a preamble that defines `$ref` as a lookup over those
    arguments.
-4. Errors with a clear "stale ref Rn — re-snapshot" message if the backendNodeId no
-   longer resolves.
+5. Errors with a clear "stale ref eN" message if the ref is missing from the map
+   or if `DOM.resolveNode` fails because the node was removed from the DOM.
 
 If the expression uses no `$ref`, the CLI skips the resolution step and just runs
 `Runtime.evaluate`.
 
-The agent sees eval's return value (JSON-serialized) followed by the auto-snapshot
-pointer line.
+`eval` returns only the JSON-serialized result of the expression. It does **not**
+auto-snapshot (see [Auto-snapshot rule](#auto-snapshot-rule-asymmetric)) — the agent
+calls `scraper snapshot` explicitly after evals that mutate the DOM.
 
 ## Documentation
 
@@ -385,7 +397,7 @@ dance repeatedly across unrelated forms.
 - How does `wait` interact with dialogs that pop during the wait? (Probably: same
   `--on-dialog` flag, default dismiss, surface in post-wait snapshot.)
 - Should we expose a `scraper refs <ref>` read-only command for debugging (prints the
-  DOM node's outerHTML)? Or is that just `eval '$ref("R3").outerHTML'`? (Latter.
+  DOM node's outerHTML)? Or is that just `eval '$ref("e3").outerHTML'`? (Latter.
   Skip the command.)
 
 ## Success Criteria
