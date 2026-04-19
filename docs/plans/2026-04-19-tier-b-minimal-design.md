@@ -235,11 +235,20 @@ current command's execution**.
 (when no scraper process was attached) are not observed: CDP does not replay missed
 `javascriptDialogOpening` events on reattach, and we do not probe for pending
 dialogs at attach time. Such a dialog remains pending in Chrome and may cause the
-next command to block or error on page interaction. Recovery is manual: the user
-dismisses it in the browser, or the agent issues
-`scraper eval 'void 0' --on-dialog dismiss` repeatedly until the page is responsive.
-A pending-dialog probe at attach time is a plausible future addition if this turns
-out to bite in practice.
+next command to block or error on page interaction.
+
+The `--on-dialog` flag does **not** help here — `Page.handleJavaScriptDialog` is
+only issued from inside the opening-event callback, so it has no effect without a
+fresh event. Recovery today is manual: the user dismisses the dialog in Chrome's
+UI, then re-runs the command.
+
+Possible future additions (deferred until observed need):
+
+- Attach-time pending-dialog probe: issue a blind `Page.handleJavaScriptDialog`
+  with `accept: false` once on every attach; errors silently if nothing is
+  pending, clears the dialog if one is.
+- A `scraper dialog dismiss|accept[:text]` escape hatch command that wraps the
+  blind handle call explicitly.
 
 **Override flag** (single, simple):
 
@@ -277,14 +286,27 @@ Available on `navigate`, `eval`, `wait`, `tab`, `upload`. No discriminated-union
 ```
 
 Overwritten on every snapshot. `activeTargetId` is *scraper's* notion of the active
-tab (set by `tab <ref>`, or by the first snapshot after a new Chrome session). It is
-**not** derived from Chrome's focused window — the user can switch tabs in Chrome
-manually without redirecting automation. Switching the scraper's active target
-requires explicit `scraper tab <ref>`.
+tab — **not** derived from Chrome's focused window. The user can switch tabs in
+Chrome manually without redirecting automation. Switching the scraper's active
+target requires explicit `scraper tab <ref>` (or `scraper navigate --new <url>`,
+which creates a new tab and makes it active).
 
-If `activeTargetId` points to a closed tab, the next command detects the missing
-target via CDP `Target.attachToTarget` failure, falls back to the first `type: "page"`
-entry in `/json/list`, updates `refs.json`, and continues.
+### Active-target resolution (three cases)
+
+Every command resolves the active target before running:
+
+1. **`refs.json` exists and `activeTargetId` points to a live tab** → attach to it.
+2. **`refs.json` exists but `activeTargetId` points to a closed tab** → CDP
+   `Target.attachToTarget` fails; fall back to the first `type: "page"` entry in
+   `/json/list`, overwrite `activeTargetId` in `refs.json`, continue.
+3. **`refs.json` does not exist (first run, fresh session)** → same fallback: pick
+   the first `type: "page"` entry from `/json/list`, write a minimal `refs.json`
+   with just `{ activeTargetId, snapshotId: null, refs: {} }`, continue. If there
+   are no page targets at all (empty Chrome? headless with no tabs?) error with
+   a clear "no tabs open; run `scraper navigate --new <url>`" message.
+
+Case 3 means the user never needs an explicit init step — any command Just Works
+against whatever tab Chrome has in front.
 
 **Gone:**
 
