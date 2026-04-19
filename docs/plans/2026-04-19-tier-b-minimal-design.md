@@ -52,19 +52,27 @@ and drop, network interception, cookie manipulation.
 
 | Command | Purpose | Auto-snapshot? |
 |---|---|---|
-| `scraper navigate <url>` | Navigate foreground tab (or open one). Waits for network idle. | Yes |
+| `scraper navigate <url>` | Navigate active tab (or open one). Waits for network idle. | **Yes** |
 | `scraper snapshot` | Capture ARIA tree + tabs + dialog state. | — (it *is* the snapshot) |
-| `scraper eval '<expr>'` | Evaluate JS in the page with `$ref(id)` helper bound. | Yes |
-| `scraper wait ...` | Wait for selector, text, or text-in-ref. | Yes on success |
-| `scraper tab <ref>` | Activate a tab by its ref from the latest snapshot. | Yes |
-| `scraper upload --ref R3 <path>` | `DOM.setFileInputFiles` on the element. | Yes |
+| `scraper eval '<expr>'` | Evaluate JS in the page with `$ref(id)` helper bound. | **No** |
+| `scraper wait ...` | Wait for selector, text, or text-in-ref. | **Yes** on success |
+| `scraper tab <ref>` | Activate a tab by its ref; becomes the active target. | **Yes** |
+| `scraper upload --ref e3 <path>` | `DOM.setFileInputFiles` on the element. | **No** |
 | `scraper screenshot` | Capture a PNG of the viewport. | No — returns image path |
 
-### Auto-snapshot rule
+### Auto-snapshot rule (asymmetric)
 
-Every command that changes page state writes a fresh snapshot and returns a one-line
-pointer to stdout. The agent reads the file via Claude Code's `Read` tool when it needs
-the content. This keeps the token cost of auto-snapshotting near zero.
+Commands that change page context (`navigate`, `tab`, `wait` on success) auto-snapshot
+and return a one-line pointer to stdout. `eval` and `upload` do **not** auto-snapshot
+— the agent calls `scraper snapshot` explicitly after DOM-mutating evals or uploads
+that change the form.
+
+Rationale: an eval is often a read (`document.title`, `el.value`). Auto-snapshotting
+reads would invalidate the agent's current refs pointlessly (see [Handle Scheme](#handle-scheme)).
+The agent decides when the DOM changed meaningfully.
+
+Snapshots are always written to disk, so when they *are* returned the token cost is
+one line — the agent reads the full file only when it needs the tree.
 
 Example:
 
@@ -72,8 +80,13 @@ Example:
 $ scraper navigate https://memberforms.uhc.com/DirectMedicalReimbursement.html
 navigated · snapshot s47 · "Direct Medical Reimbursement" · 14 refs · 8421B
 
-$ scraper eval '$ref("R8").click()'
+$ scraper eval 'document.title'
+"Direct Medical Reimbursement"
+
+$ scraper eval '$ref("e8").click()'
 undefined
+
+$ scraper snapshot
 snapshot s48 · step 2 visible · 22 refs · 11240B
 ```
 
@@ -85,29 +98,85 @@ subsumed by `eval` or removed.
 
 ## Handle Scheme
 
-Opaque refs (`R3`, `R47`) assigned during snapshot, persisted in `refs.json`,
-backed by CDP `backendNodeId`. Resolved inside `eval` via a single injected helper:
+Element refs are opaque short strings (`e1`, `e14`, `e47`). Tab refs use a `t` prefix
+(`t1`, `t2`). Both are backed by CDP `backendNodeId` (elements) or `targetId` (tabs),
+persisted in `refs.json`, resolved inside `eval` via a single injected helper:
 
 ```js
-$ref("R8")  // → Element, or throws "stale ref" if snapshot has been replaced
+$ref("e8")  // → Element, or throws "stale ref" if not in current refs.json
 ```
 
-Refs are valid only against the latest snapshot. Using a ref from `s47` after `s49`
-exists is an error. Agent must re-snapshot and retry.
+### Monotonic counter (session-scoped)
 
-`$ref` is the *only* helper preloaded into the eval context. No `$`, no `$$`, no
-form-manipulation helpers, no React-setter wrapper. Agents write raw JS. A
-shipped-stdlib for common patterns (fill-with-react-setter, scroll-to-bottom, etc.)
-is a future addition, driven by observed repetition — not speculation.
+The counter that generates ref names **never resets within a Chrome session**.
+Snapshot `s47` might assign `e1..e14`; the next snapshot `s49` starts at `e15`, never
+reuses `e3`. This matters because `refs.json` holds only the latest snapshot's
+subset — a stale ref is one not present in current `refs.json`, and monotonic numbering
+guarantees a stale ref never silently binds to a different node.
 
-Tab refs (`T1`, `T2`) follow the same scheme but are scoped to tabs, usable only with
-the `tab` command.
+The counter is persisted in `~/.scraper/counter-refs` (separate from the `counter`
+used for snapshot/screenshot IDs since they increment at different rates).
+
+### Stale ref error
+
+```
+error: ref e3 is stale — not in current snapshot (s49, refs e15..e22).
+Run `scraper snapshot` and retry with a fresh ref.
+```
+
+### Eval context
+
+`$ref` is the *only* helper preloaded. No `$`, no `$$`, no form-manipulation helpers,
+no React-setter wrapper. Agents write raw JS against the DOM.
+
+A shipped-stdlib for common patterns is a future addition driven by observed
+repetition, not speculation. **Top candidate:** `$fill(ref, value)` that bundles the
+React-controlled-input setter dance:
+
+```js
+// Agent writes this repeatedly for React forms today:
+const el = $ref("e3");
+const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+setter.call(el, "Emil");
+el.dispatchEvent(new Event("input",  { bubbles: true }));
+el.dispatchEvent(new Event("change", { bubbles: true }));
+
+// With $fill shipped, becomes:
+$fill("e3", "Emil");
+```
+
+Ship it as soon as we see this pattern repeated across 2–3 independent forms.
+(UHC Reimbursement already requires it for subscriber fields — one data point.)
 
 ## Snapshot Artifact
 
 Snapshots are written to `~/.scraper/s{N}.yaml` with a monotonic counter shared across
 all artifacts (snapshots and screenshots). Screenshots are `~/.scraper/shot{N}.png`
 using the same counter space, so numbering preserves the timeline at a glance.
+
+### Ref coverage
+
+The current tree builder (`src/aria/tree.ts`) emits refs only for a narrow set of
+roles: link, button, textbox, checkbox, radio, combobox. This is too narrow for the
+thesis — real forms include spinbuttons (date widgets), sliders, tabs, menuitems,
+switches, textareas, etc., and the UHC form hit exactly this problem with its Date
+spinbutton widget.
+
+Widen `INTERACTABLE_ROLES` to cover the full WAI-ARIA widget category:
+
+```
+link, button, textbox, searchbox, textarea,
+checkbox, radio, switch,
+combobox, listbox, option, menuitem, menuitemcheckbox, menuitemradio,
+slider, spinbutton,
+tab, treeitem,
+gridcell, row, columnheader, rowheader
+```
+
+Also assign a ref to any element that carries an explicit accessible name even if its
+role is non-interactive (e.g., a named landmark the agent might want to scope a
+`querySelector` to). Non-interactive structural nodes without a name remain unref'd —
+use `document.querySelector` in `eval` for those.
 
 ### YAML shape
 
@@ -116,11 +185,11 @@ snapshot: s47
 url: https://memberforms.uhc.com/DirectMedicalReimbursement.html
 title: Direct Medical Reimbursement
 tabs:
-  - ref: T1
+  - ref: t1
     active: true
     url: https://memberforms.uhc.com/...
     title: Direct Medical Reimbursement
-  - ref: T2
+  - ref: t2
     url: https://mail.google.com/...
     title: Inbox
 dialog: null
@@ -128,29 +197,40 @@ tree:
   - role: main
     name: Reimbursement Form
     children:
-      - role: textbox, name: Member ID, ref: R3
-      - role: button, name: Next, ref: R8
+      - role: textbox, name: Member ID, ref: e3
+      - role: button, name: Next, ref: e8
 ```
 
 `tabs:` is always present, so the agent never needs a separate `pages` command.
-`dialog:` surfaces any JavaScript dialog that appeared since the last snapshot (see
-[Dialog Handling](#dialog-handling)).
+`dialog:` surfaces any JavaScript dialog observed during the command that produced
+this snapshot (see [Dialog Handling](#dialog-handling)).
 
 ### Cleanup
 
 On every snapshot write: keep the newest 20 artifacts in `~/.scraper/`, delete any
 older than 24 hours. Opportunistic, no daemon.
 
-Old ids are never reused. Counter is persisted in `~/.scraper/counter`.
+Old ids are never reused. Counters are persisted in `~/.scraper/counter` (artifact
+IDs) and `~/.scraper/counter-refs` (ref IDs).
 
 ## Dialog Handling
 
-Native JS dialogs (`alert`, `confirm`, `prompt`, `beforeunload`) cannot be handled from
-page JS. They require CDP `Page.handleJavaScriptDialog`.
+Native JS dialogs (`alert`, `confirm`, `prompt`, `beforeunload`) cannot be handled
+from page JS. They require CDP `Page.handleJavaScriptDialog`.
 
 **Default:** auto-**dismiss**. Safer default — "say no to the thing I didn't ask for."
-Dialog text appears in the next auto-snapshot under a `dialog:` key so the agent
-observes that it happened and can retry with an explicit accept if needed.
+Dialog text appears in the snapshot produced by the current command under a `dialog:`
+key so the agent observes that it happened and can retry with an explicit accept
+if needed.
+
+**Observability scope (narrow).** Dialog detection is a per-CDP-connection event
+listener (`src/cdp/dialog.ts`). Because Tier B opens a fresh CDP connection per
+command, `dialog:` in a snapshot reflects **only dialogs that opened during the
+current command's execution**, not dialogs that opened between commands. Dialogs
+that popped while no scraper command was running will still be pending in Chrome —
+the next command that tries to interact with the page will observe that pending
+dialog (Chrome blocks page interaction until it's handled) and apply the same
+default-dismiss behavior, surfacing the text in that command's snapshot.
 
 **Override flag** (single, simple):
 
@@ -165,11 +245,37 @@ Available on `navigate`, `eval`, `wait`, `tab`, `upload`. No discriminated-union
 
 ```
 ~/.scraper/
-├── counter          # monotonic int
-├── refs.json        # current ref → backendNodeId map (latest snapshot only)
+├── counter          # monotonic int for snapshot/screenshot IDs
+├── counter-refs     # monotonic int for e/t ref IDs (session-scoped)
+├── refs.json        # { activeTargetId, snapshotId, refs: { e3: backendId, t1: targetId, ... } }
 ├── s{N}.yaml        # snapshot artifacts
 └── shot{N}.png      # screenshot artifacts
 ```
+
+### refs.json shape
+
+```json
+{
+  "activeTargetId": "B2E7C1A4...",
+  "snapshotId": "s47",
+  "refs": {
+    "e3":  { "kind": "element", "backendNodeId": 1234 },
+    "e8":  { "kind": "element", "backendNodeId": 1287 },
+    "t1":  { "kind": "tab", "targetId": "B2E7C1A4..." },
+    "t2":  { "kind": "tab", "targetId": "D9F3A8E1..." }
+  }
+}
+```
+
+Overwritten on every snapshot. `activeTargetId` is *scraper's* notion of the active
+tab (set by `tab <ref>`, or by the first snapshot after a new Chrome session). It is
+**not** derived from Chrome's focused window — the user can switch tabs in Chrome
+manually without redirecting automation. Switching the scraper's active target
+requires explicit `scraper tab <ref>`.
+
+If `activeTargetId` points to a closed tab, the next command detects the missing
+target via CDP `Target.attachToTarget` failure, falls back to the first `type: "page"`
+entry in `/json/list`, updates `refs.json`, and continues.
 
 **Gone:**
 
@@ -181,10 +287,12 @@ Available on `navigate`, `eval`, `wait`, `tab`, `upload`. No discriminated-union
 
 **Attach behavior on every command:**
 
-Each invocation reads `DevToolsActivePort` from the default Chrome user data directory,
-connects, runs the command, closes the connection. No persistent attachment state.
-First-time users get a clear error message pointing them at
-`chrome://inspect/#remote-debugging` if remote debugging is off.
+Each invocation reads `DevToolsActivePort` from the default Chrome user data
+directory, connects to the `activeTargetId` from `refs.json` (with the closed-tab
+fallback above), runs the command, closes the connection. No persistent attachment
+state beyond the active-target bookkeeping. First-time users get a clear error
+message pointing them at `chrome://inspect/#remote-debugging` if remote debugging
+is off.
 
 Channel selection (`--channel beta|canary|dev`) stays as an environment variable or
 flag, but without the `attached` vs `owned` branching it's a thin lookup.
@@ -283,9 +391,12 @@ dance repeatedly across unrelated forms.
 ## Success Criteria
 
 The UHC form in `/Users/filip/Desktop/Invoices/CLAUDE.md` can be filled and submitted
-end-to-end using only: `navigate`, `snapshot`, `eval`, `wait`, `upload`. No agent-side
-workarounds, no reach for an external MCP, no "this tool doesn't work for this field
-type, try a different one."
+end-to-end using only: `navigate`, `snapshot`, `eval`, `wait`, `upload`. The agent
+does not need to reach for an external MCP (chrome-devtools-mcp, browser-use, etc.)
+at any point, and does not get stuck on "this tool doesn't work for this field type,
+try a different one" — because there is no type-sensitive semantic-action layer to
+get stuck on. Writing raw JS (including the React-setter dance) is the primitive,
+not a fallback.
 
 Total CLI command count: 7 (from 15). Code size: ~40% reduction. State: one store
-for refs + one counter, no process-lifecycle bookkeeping.
+for refs + active target, two monotonic counters, no process-lifecycle bookkeeping.
