@@ -56,12 +56,9 @@ async function discoverPageTarget(port: number): Promise<string> {
 }
 
 /**
- * Launch a test Chrome, point scraper at it, and seed the target file
- * with the initial page so subsequent commands have a target.
- *
- * Tier B will replace the persisted target with stateless `--tab` addressing
- * (#40, #43); until then this helper writes the target file directly because
- * the `pages`/`page` CLI commands have been removed.
+ * Launch a test Chrome, point scraper at it, and return the initial page's
+ * full targetId so callers can pass it via `--tab`. Tier B has no persisted
+ * active target — every command addresses a tab explicitly.
  */
 export async function startTestRuntime(): Promise<TestRuntime> {
   const tmpHome = await Deno.makeTempDir();
@@ -75,8 +72,6 @@ export async function startTestRuntime(): Promise<TestRuntime> {
   let targetId: string;
   try {
     targetId = await discoverPageTarget(chrome.port);
-    await Deno.mkdir(`${tmpHome}/.scraper`, { recursive: true });
-    await Deno.writeTextFile(`${tmpHome}/.scraper/target`, targetId);
   } catch (err) {
     await stopTestRuntime({ chrome, tmpHome, env, targetId: "" });
     throw err;

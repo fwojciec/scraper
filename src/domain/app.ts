@@ -1,7 +1,6 @@
 import type { ActionOptions, ActionResult } from "./action.ts";
 import type { ElementTarget } from "./element.ts";
 import type { EvalResult } from "./eval.ts";
-import type { PageId, PageInfo } from "./page.ts";
 import type { SnapshotOptions, SnapshotResult } from "./snapshot.ts";
 
 /**
@@ -13,14 +12,22 @@ export type WaitRequest =
   | { kind: "text"; text: string; timeoutMs?: number }
   | { kind: "textInElement"; target: ElementTarget; text: string; timeoutMs?: number };
 
-/** Application-level contract for the scraper. */
+/**
+ * Application-level contract for the scraper. Every tab-scoped method takes an
+ * already-canonical full `targetId` (32-hex Chrome target id). Canonicalization
+ * from a user-supplied prefix is the CLI's responsibility — see
+ * `src/cdp/tabs.ts::canonicalizeTargetId`.
+ */
 export interface ScraperApp {
-  pages(): Promise<PageInfo[]>;
-  selectPage(pageId: PageId): Promise<void>;
-  navigate(url: string, options?: ActionOptions): Promise<ActionResult>;
-  snapshot(options: SnapshotOptions): Promise<SnapshotResult>;
-  evaluate(expression: string): Promise<EvalResult>;
-  screenshot(fullPage?: boolean): Promise<string>;
-  upload(target: ElementTarget, filePath: string, options?: ActionOptions): Promise<ActionResult>;
-  wait(request: WaitRequest): Promise<void>;
+  navigate(targetId: string, url: string, options?: ActionOptions): Promise<ActionResult>;
+  snapshot(targetId: string, options: SnapshotOptions): Promise<SnapshotResult>;
+  evaluate(targetId: string, expression: string): Promise<EvalResult>;
+  screenshot(targetId: string, fullPage?: boolean): Promise<string>;
+  upload(
+    targetId: string,
+    target: ElementTarget,
+    filePath: string,
+    options?: ActionOptions,
+  ): Promise<ActionResult>;
+  wait(targetId: string, request: WaitRequest): Promise<void>;
 }

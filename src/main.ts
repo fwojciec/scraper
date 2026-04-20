@@ -4,25 +4,20 @@ import { dirname } from "@std/path";
 import { type CliDeps, runCli } from "./cli/mod.ts";
 import {
   buildBrowserWsUrl,
-  createBrowserConnection,
+  canonicalizeTargetId,
   createPageConnection,
   defaultUserDataDir,
+  matchTabByPrefix,
   readDevToolsActivePort,
   resolveTarget,
 } from "./cdp/mod.ts";
 import { createSnapshotService } from "./aria/mod.ts";
-import {
-  type CounterStore,
-  createScraperApp,
-  type RefsStore,
-  type TargetStore,
-} from "./app/mod.ts";
+import { type CounterStore, createScraperApp, type RefsStore } from "./app/mod.ts";
 import type { RefMap } from "./domain/mod.ts";
 
 const HOME = Deno.env.get("HOME");
 if (!HOME) throw new Error("HOME environment variable is not set");
 const STATE_DIR = `${HOME}/.scraper`;
-const TARGET_PATH = `${STATE_DIR}/target`;
 const REF_COUNTER_PATH = `${STATE_DIR}/counter-refs`;
 const refsPathFor = (targetId: string) => `${STATE_DIR}/refs.${targetId}.json`;
 
@@ -43,19 +38,6 @@ async function removeIfExists(path: string): Promise<void> {
     if (!(e instanceof Deno.errors.NotFound)) throw e;
   }
 }
-
-const targetStore: TargetStore = {
-  async read() {
-    try {
-      return (await Deno.readTextFile(TARGET_PATH)).trim() || null;
-    } catch (e) {
-      if (e instanceof Deno.errors.NotFound) return null;
-      throw e;
-    }
-  },
-  write: (targetId) => writeFileAtomic(TARGET_PATH, targetId),
-  remove: () => removeIfExists(TARGET_PATH),
-};
 
 const refsStore: RefsStore = {
   async read(targetId) {
@@ -93,18 +75,26 @@ const app = createScraperApp({
   userDataDir,
   readDevToolsActivePort,
   buildBrowserWsUrl,
-  createBrowserConnection,
   createPageConnection,
   resolveTarget,
   createSnapshotService,
-  targetStore,
   refsStore,
   refCounterStore,
   warn: (s) => Deno.stderr.writeSync(encoder.encode(s)),
 });
 
+async function canonicalizeTab(input: string): Promise<string> {
+  // Missing-flag check short-circuits before any Chrome I/O so
+  // `scraper snapshot` (etc.) without `--tab` reports the documented error
+  // even when Chrome isn't running.
+  if (!input) return matchTabByPrefix(input, []);
+  const { port } = await readDevToolsActivePort(userDataDir);
+  return await canonicalizeTargetId(input, port);
+}
+
 const deps: CliDeps = {
   app,
+  canonicalizeTab,
   stdout: (s) => Deno.stdout.writeSync(encoder.encode(s)),
   stderr: (s) => Deno.stderr.writeSync(encoder.encode(s)),
 };

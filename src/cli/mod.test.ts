@@ -2,29 +2,53 @@ import { assertEquals, assertStringIncludes } from "@std/assert";
 import { type CliDeps, runCli } from "./mod.ts";
 import type { ScraperApp } from "../domain/mod.ts";
 
+const FULL_TAB = "4AE7B2C9E1D4F0A2B8C6E1F3A5D9B7C2";
+
 function stubApp(overrides: Partial<ScraperApp> = {}): ScraperApp {
   return {
     navigate: () => Promise.resolve({}),
     snapshot: () => Promise.resolve({ yaml: "- heading", refs: {}, lastRefCounter: 0 }),
     evaluate: () => Promise.resolve({ result: null }),
     screenshot: () => Promise.resolve("/tmp/shot.png"),
-    pages: () => Promise.resolve([]),
-    selectPage: () => Promise.resolve(),
     wait: () => Promise.resolve(),
     upload: () => Promise.resolve({}),
     ...overrides,
   };
 }
 
+/**
+ * Default canonicalizeTab that echoes the prefix to the full fixture id.
+ * Override per-test for missing-flag / no-match / ambiguous scenarios.
+ */
+function stubCanonicalize(
+  impl?: (input: string) => Promise<string>,
+): (input: string) => Promise<string> {
+  return impl ?? ((input: string) => {
+    if (!input) {
+      return Promise.reject(
+        new Error(
+          "--tab <targetId> is required. Run `scraper tabs` to list tabs, or `scraper navigate --new <url>` to open a new one.",
+        ),
+      );
+    }
+    if (FULL_TAB.startsWith(input)) return Promise.resolve(FULL_TAB);
+    return Promise.reject(
+      new Error(`no tab with prefix \`${input}\`; run \`scraper tabs\` to see available tabs.`),
+    );
+  });
+}
+
 function stubDeps(
   overrides: {
     app?: Partial<ScraperApp>;
+    canonicalizeTab?: (input: string) => Promise<string>;
     stdout?: (s: string) => void;
     stderr?: (s: string) => void;
   } = {},
 ): CliDeps {
   return {
     app: stubApp(overrides.app),
+    canonicalizeTab: stubCanonicalize(overrides.canonicalizeTab),
     stdout: overrides.stdout ?? (() => {}),
     stderr: overrides.stderr ?? (() => {}),
   };
@@ -87,16 +111,113 @@ Deno.test("removed commands report as unknown", async () => {
   }
 });
 
+// --- --tab canonicalization + error paths (shared across commands) ---
+
+Deno.test("tab-scoped command without --tab reports missing-flag error verbatim", async () => {
+  for (
+    const argv of [
+      ["navigate", "https://example.com"],
+      ["snapshot"],
+      ["eval", "document.title"],
+      ["screenshot"],
+      ["upload", "--ref", "e4", "./photo.jpg"],
+      ["wait", "--text", "hi"],
+    ]
+  ) {
+    const io = capture();
+    const code = await runCli(argv, stubDeps({ stderr: io.stderr }));
+    assertEquals(code, 1, `${argv[0]} without --tab should fail`);
+    assertStringIncludes(
+      io.err,
+      "--tab <targetId> is required. Run `scraper tabs` to list tabs, or `scraper navigate --new <url>` to open a new one.",
+    );
+  }
+});
+
+Deno.test("--tab with unknown prefix reports no-match error verbatim", async () => {
+  const io = capture();
+  const code = await runCli(
+    ["snapshot", "--tab", "zzzz"],
+    stubDeps({
+      canonicalizeTab: (input) =>
+        Promise.reject(
+          new Error(`no tab with prefix \`${input}\`; run \`scraper tabs\` to see available tabs.`),
+        ),
+      stderr: io.stderr,
+    }),
+  );
+  assertEquals(code, 1);
+  assertStringIncludes(
+    io.err,
+    "no tab with prefix `zzzz`; run `scraper tabs` to see available tabs.",
+  );
+});
+
+Deno.test("--tab with ambiguous prefix reports error with match count", async () => {
+  const io = capture();
+  const code = await runCli(
+    ["snapshot", "--tab", "4A"],
+    stubDeps({
+      canonicalizeTab: (input) =>
+        Promise.reject(
+          new Error(
+            `ambiguous prefix \`${input}\`, matches 3 tabs; provide more characters (full IDs are printed by \`scraper tabs\`).`,
+          ),
+        ),
+      stderr: io.stderr,
+    }),
+  );
+  assertEquals(code, 1);
+  assertStringIncludes(
+    io.err,
+    "ambiguous prefix `4A`, matches 3 tabs; provide more characters (full IDs are printed by `scraper tabs`).",
+  );
+});
+
+Deno.test("--tab prefix is canonicalized and the full id is passed to the app", async () => {
+  let receivedTargetId = "";
+  const code = await runCli(
+    ["snapshot", "--tab", "4AE7"],
+    stubDeps({
+      app: {
+        snapshot: (targetId) => {
+          receivedTargetId = targetId;
+          return Promise.resolve({ yaml: "", refs: {}, lastRefCounter: 0 });
+        },
+      },
+    }),
+  );
+  assertEquals(code, 0);
+  assertEquals(receivedTargetId, FULL_TAB);
+});
+
+Deno.test("--tab full id is a no-op canonicalization (same id passed through)", async () => {
+  let receivedTargetId = "";
+  const code = await runCli(
+    ["snapshot", "--tab", FULL_TAB],
+    stubDeps({
+      app: {
+        snapshot: (targetId) => {
+          receivedTargetId = targetId;
+          return Promise.resolve({ yaml: "", refs: {}, lastRefCounter: 0 });
+        },
+      },
+    }),
+  );
+  assertEquals(code, 0);
+  assertEquals(receivedTargetId, FULL_TAB);
+});
+
 // --- navigate ---
 
 Deno.test("navigate calls dep with url and prints confirmation", async () => {
   let navigatedUrl = "";
   const io = capture();
   const code = await runCli(
-    ["navigate", "https://example.com"],
+    ["navigate", "--tab", "4AE7", "https://example.com"],
     stubDeps({
       app: {
-        navigate: (url) => {
+        navigate: (_targetId, url) => {
           navigatedUrl = url;
           return Promise.resolve({});
         },
@@ -111,7 +232,10 @@ Deno.test("navigate calls dep with url and prints confirmation", async () => {
 
 Deno.test("navigate without url returns error", async () => {
   const io = capture();
-  const code = await runCli(["navigate"], stubDeps({ stderr: io.stderr }));
+  const code = await runCli(
+    ["navigate", "--tab", "4AE7"],
+    stubDeps({ stderr: io.stderr }),
+  );
   assertEquals(code, 1);
   assertStringIncludes(io.err, "url is required");
 });
@@ -119,7 +243,7 @@ Deno.test("navigate without url returns error", async () => {
 Deno.test("navigate reports error from dep", async () => {
   const io = capture();
   const code = await runCli(
-    ["navigate", "https://example.com"],
+    ["navigate", "--tab", "4AE7", "https://example.com"],
     stubDeps({
       app: { navigate: () => Promise.reject(new Error("chrome is not running")) },
       stderr: io.stderr,
@@ -132,10 +256,10 @@ Deno.test("navigate reports error from dep", async () => {
 Deno.test("navigate --snapshot outputs YAML to stdout and status to stderr", async () => {
   const io = capture();
   const code = await runCli(
-    ["navigate", "https://example.com", "--snapshot"],
+    ["navigate", "--tab", "4AE7", "https://example.com", "--snapshot"],
     stubDeps({
       app: {
-        navigate: (_url, opts) => {
+        navigate: (_targetId, _url, opts) => {
           assertEquals(opts?.includeSnapshot, true);
           return Promise.resolve({
             snapshot: { yaml: "- heading\n", refs: {}, lastRefCounter: 0 },
@@ -157,7 +281,7 @@ Deno.test("snapshot prints YAML", async () => {
   const io = capture();
   const yaml = '- main:\n    - heading "Hello"';
   const code = await runCli(
-    ["snapshot"],
+    ["snapshot", "--tab", "4AE7"],
     stubDeps({
       app: { snapshot: () => Promise.resolve({ yaml, refs: {}, lastRefCounter: 0 }) },
       stdout: io.stdout,
@@ -170,10 +294,20 @@ Deno.test("snapshot prints YAML", async () => {
 Deno.test("snapshot passes all options", async () => {
   let receivedOpts: Record<string, unknown> = {};
   const code = await runCli(
-    ["snapshot", "--max-depth", "5", "--max-nodes", "100", "--selector", "#main"],
+    [
+      "snapshot",
+      "--tab",
+      "4AE7",
+      "--max-depth",
+      "5",
+      "--max-nodes",
+      "100",
+      "--selector",
+      "#main",
+    ],
     stubDeps({
       app: {
-        snapshot: (opts: Record<string, unknown>) => {
+        snapshot: (_targetId, opts: Record<string, unknown>) => {
           receivedOpts = { ...opts };
           return Promise.resolve({ yaml: "- heading", refs: {}, lastRefCounter: 0 });
         },
@@ -189,7 +323,7 @@ Deno.test("snapshot passes all options", async () => {
 Deno.test("snapshot rejects malformed --max-depth", async () => {
   const io = capture();
   const code = await runCli(
-    ["snapshot", "--max-depth", "deep"],
+    ["snapshot", "--tab", "4AE7", "--max-depth", "deep"],
     stubDeps({ stderr: io.stderr }),
   );
   assertEquals(code, 1);
@@ -199,7 +333,7 @@ Deno.test("snapshot rejects malformed --max-depth", async () => {
 Deno.test("snapshot reports error from dep", async () => {
   const io = capture();
   const code = await runCli(
-    ["snapshot"],
+    ["snapshot", "--tab", "4AE7"],
     stubDeps({
       app: { snapshot: () => Promise.reject(new Error("chrome is not running")) },
       stderr: io.stderr,
@@ -215,10 +349,10 @@ Deno.test("eval calls dep with expression and prints JSON result", async () => {
   let receivedExpr = "";
   const io = capture();
   const code = await runCli(
-    ["eval", "document.title"],
+    ["eval", "--tab", "4AE7", "document.title"],
     stubDeps({
       app: {
-        evaluate: (expr) => {
+        evaluate: (_targetId, expr) => {
           receivedExpr = expr;
           return Promise.resolve({ result: { title: "Test" } });
         },
@@ -233,7 +367,10 @@ Deno.test("eval calls dep with expression and prints JSON result", async () => {
 
 Deno.test("eval without expression returns error", async () => {
   const io = capture();
-  const code = await runCli(["eval"], stubDeps({ stderr: io.stderr }));
+  const code = await runCli(
+    ["eval", "--tab", "4AE7"],
+    stubDeps({ stderr: io.stderr }),
+  );
   assertEquals(code, 1);
   assertStringIncludes(io.err, "expression is required");
 });
@@ -241,7 +378,7 @@ Deno.test("eval without expression returns error", async () => {
 Deno.test("eval reports error from dep", async () => {
   const io = capture();
   const code = await runCli(
-    ["eval", "1+1"],
+    ["eval", "--tab", "4AE7", "1+1"],
     stubDeps({
       app: { evaluate: () => Promise.reject(new Error("chrome is not running")) },
       stderr: io.stderr,
@@ -256,7 +393,7 @@ Deno.test("eval reports error from dep", async () => {
 Deno.test("screenshot prints path", async () => {
   const io = capture();
   const code = await runCli(
-    ["screenshot"],
+    ["screenshot", "--tab", "4AE7"],
     stubDeps({
       app: { screenshot: () => Promise.resolve("/tmp/shot.png") },
       stdout: io.stdout,
@@ -269,10 +406,10 @@ Deno.test("screenshot prints path", async () => {
 Deno.test("screenshot passes --full-page option", async () => {
   let receivedFullPage: boolean | undefined;
   const code = await runCli(
-    ["screenshot", "--full-page"],
+    ["screenshot", "--tab", "4AE7", "--full-page"],
     stubDeps({
       app: {
-        screenshot: (fullPage) => {
+        screenshot: (_targetId, fullPage) => {
           receivedFullPage = fullPage;
           return Promise.resolve("/tmp/shot.png");
         },
@@ -286,7 +423,7 @@ Deno.test("screenshot passes --full-page option", async () => {
 Deno.test("screenshot reports error from dep", async () => {
   const io = capture();
   const code = await runCli(
-    ["screenshot"],
+    ["screenshot", "--tab", "4AE7"],
     stubDeps({
       app: { screenshot: () => Promise.reject(new Error("chrome is not running")) },
       stderr: io.stderr,
@@ -302,10 +439,10 @@ Deno.test("wait --selector calls dep with selector request", async () => {
   let receivedRequest: unknown;
   const io = capture();
   const code = await runCli(
-    ["wait", "--selector", ".result"],
+    ["wait", "--tab", "4AE7", "--selector", ".result"],
     stubDeps({
       app: {
-        wait: (request) => {
+        wait: (_targetId, request) => {
           receivedRequest = request;
           return Promise.resolve();
         },
@@ -326,10 +463,10 @@ Deno.test("wait --text calls dep with text request", async () => {
   let receivedRequest: unknown;
   const io = capture();
   const code = await runCli(
-    ["wait", "--text", "Success"],
+    ["wait", "--tab", "4AE7", "--text", "Success"],
     stubDeps({
       app: {
-        wait: (request) => {
+        wait: (_targetId, request) => {
           receivedRequest = request;
           return Promise.resolve();
         },
@@ -346,10 +483,10 @@ Deno.test("wait --ref --text calls dep with textInElement request", async () => 
   let receivedRequest: unknown;
   const io = capture();
   const code = await runCli(
-    ["wait", "--ref", "e5", "--text", "Done"],
+    ["wait", "--tab", "4AE7", "--ref", "e5", "--text", "Done"],
     stubDeps({
       app: {
-        wait: (request) => {
+        wait: (_targetId, request) => {
           receivedRequest = request;
           return Promise.resolve();
         },
@@ -371,10 +508,10 @@ Deno.test("wait --selector --text calls dep with textInElement request", async (
   let receivedRequest: unknown;
   const io = capture();
   const code = await runCli(
-    ["wait", "--selector", ".result", "--text", "OK"],
+    ["wait", "--tab", "4AE7", "--selector", ".result", "--text", "OK"],
     stubDeps({
       app: {
-        wait: (request) => {
+        wait: (_targetId, request) => {
           receivedRequest = request;
           return Promise.resolve();
         },
@@ -395,10 +532,10 @@ Deno.test("wait --selector --text calls dep with textInElement request", async (
 Deno.test("wait --timeout passes timeout to dep", async () => {
   let receivedRequest: unknown;
   const code = await runCli(
-    ["wait", "--text", "OK", "--timeout", "3000"],
+    ["wait", "--tab", "4AE7", "--text", "OK", "--timeout", "3000"],
     stubDeps({
       app: {
-        wait: (request) => {
+        wait: (_targetId, request) => {
           receivedRequest = request;
           return Promise.resolve();
         },
@@ -412,7 +549,7 @@ Deno.test("wait --timeout passes timeout to dep", async () => {
 Deno.test("wait --ref without --text returns error", async () => {
   const io = capture();
   const code = await runCli(
-    ["wait", "--ref", "e5"],
+    ["wait", "--tab", "4AE7", "--ref", "e5"],
     stubDeps({ stderr: io.stderr }),
   );
   assertEquals(code, 1);
@@ -421,7 +558,10 @@ Deno.test("wait --ref without --text returns error", async () => {
 
 Deno.test("wait without any condition returns error", async () => {
   const io = capture();
-  const code = await runCli(["wait"], stubDeps({ stderr: io.stderr }));
+  const code = await runCli(
+    ["wait", "--tab", "4AE7"],
+    stubDeps({ stderr: io.stderr }),
+  );
   assertEquals(code, 1);
   assertStringIncludes(io.err, "at least one of");
 });
@@ -429,7 +569,7 @@ Deno.test("wait without any condition returns error", async () => {
 Deno.test("wait --ref and --selector returns error", async () => {
   const io = capture();
   const code = await runCli(
-    ["wait", "--ref", "e5", "--selector", ".x", "--text", "hi"],
+    ["wait", "--tab", "4AE7", "--ref", "e5", "--selector", ".x", "--text", "hi"],
     stubDeps({ stderr: io.stderr }),
   );
   assertEquals(code, 1);
@@ -439,7 +579,7 @@ Deno.test("wait --ref and --selector returns error", async () => {
 Deno.test("wait reports timeout error from dep", async () => {
   const io = capture();
   const code = await runCli(
-    ["wait", "--text", "never"],
+    ["wait", "--tab", "4AE7", "--text", "never"],
     stubDeps({
       app: {
         wait: () => Promise.reject(new Error('timed out waiting for text "never" (5000ms)')),
@@ -458,10 +598,10 @@ Deno.test("upload --ref with path calls dep correctly", async () => {
   let receivedPath: string | undefined;
   const io = capture();
   const code = await runCli(
-    ["upload", "--ref", "e4", "./document.pdf"],
+    ["upload", "--tab", "4AE7", "--ref", "e4", "./document.pdf"],
     stubDeps({
       app: {
-        upload: (target, filePath) => {
+        upload: (_targetId, target, filePath) => {
           receivedTarget = target;
           receivedPath = filePath;
           return Promise.resolve({});
@@ -480,10 +620,10 @@ Deno.test("upload --selector with path calls dep correctly", async () => {
   let receivedTarget: unknown;
   const io = capture();
   const code = await runCli(
-    ["upload", "--selector", "input[type=file]", "./photo.jpg"],
+    ["upload", "--tab", "4AE7", "--selector", "input[type=file]", "./photo.jpg"],
     stubDeps({
       app: {
-        upload: (target) => {
+        upload: (_targetId, target) => {
           receivedTarget = target;
           return Promise.resolve({});
         },
@@ -499,7 +639,7 @@ Deno.test("upload --selector with path calls dep correctly", async () => {
 Deno.test("upload without path returns error", async () => {
   const io = capture();
   const code = await runCli(
-    ["upload", "--ref", "e4"],
+    ["upload", "--tab", "4AE7", "--ref", "e4"],
     stubDeps({ stderr: io.stderr }),
   );
   assertEquals(code, 1);
@@ -509,7 +649,7 @@ Deno.test("upload without path returns error", async () => {
 Deno.test("upload without target returns error", async () => {
   const io = capture();
   const code = await runCli(
-    ["upload", "./photo.jpg"],
+    ["upload", "--tab", "4AE7", "./photo.jpg"],
     stubDeps({ stderr: io.stderr }),
   );
   assertEquals(code, 1);
@@ -519,10 +659,10 @@ Deno.test("upload without target returns error", async () => {
 Deno.test("upload --snapshot outputs YAML", async () => {
   const io = capture();
   const code = await runCli(
-    ["upload", "--ref", "e4", "./photo.jpg", "--snapshot"],
+    ["upload", "--tab", "4AE7", "--ref", "e4", "./photo.jpg", "--snapshot"],
     stubDeps({
       app: {
-        upload: (_target, _path, opts) => {
+        upload: (_targetId, _target, _path, opts) => {
           assertEquals(opts?.includeSnapshot, true);
           return Promise.resolve({
             snapshot: { yaml: "- textbox\n", refs: {}, lastRefCounter: 0 },
@@ -541,7 +681,7 @@ Deno.test("upload --snapshot outputs YAML", async () => {
 Deno.test("navigate rejects --on-dialog with a clear error", async () => {
   const io = capture();
   const code = await runCli(
-    ["navigate", "https://example.com", "--on-dialog", "accept"],
+    ["navigate", "--tab", "4AE7", "https://example.com", "--on-dialog", "accept"],
     stubDeps({ stderr: io.stderr }),
   );
   assertEquals(code, 1);
@@ -551,7 +691,7 @@ Deno.test("navigate rejects --on-dialog with a clear error", async () => {
 Deno.test("upload rejects --on-dialog with a clear error", async () => {
   const io = capture();
   const code = await runCli(
-    ["upload", "--ref", "e4", "./photo.jpg", "--on-dialog", "accept"],
+    ["upload", "--tab", "4AE7", "--ref", "e4", "./photo.jpg", "--on-dialog", "accept"],
     stubDeps({ stderr: io.stderr }),
   );
   assertEquals(code, 1);
@@ -561,7 +701,7 @@ Deno.test("upload rejects --on-dialog with a clear error", async () => {
 Deno.test("upload reports error from dep", async () => {
   const io = capture();
   const code = await runCli(
-    ["upload", "--ref", "e4", "./photo.jpg"],
+    ["upload", "--tab", "4AE7", "--ref", "e4", "./photo.jpg"],
     stubDeps({
       app: { upload: () => Promise.reject(new Error("element is not a file input")) },
       stderr: io.stderr,

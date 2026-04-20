@@ -2,27 +2,20 @@
 // The only internal module allowed to depend on multiple adapters (cdp/, aria/).
 //
 // Attach-only: every command reads DevToolsActivePort and opens a fresh CDP
-// connection. No process-lifecycle bookkeeping, no persisted chrome.json.
+// connection. No process-lifecycle bookkeeping, no persisted chrome.json, no
+// active target — callers address every tab explicitly via a canonical targetId.
 
-import type { CdpBrowserService, CdpPageService } from "../cdp/mod.ts";
+import type { CdpPageService } from "../cdp/mod.ts";
 import type { SnapshotDeps } from "../aria/mod.ts";
 import type {
   ActionOptions,
   ActionResult,
   ElementTarget,
-  PageInfo,
   RefMap,
   ScraperApp,
   SnapshotService,
   WaitRequest,
 } from "../domain/mod.ts";
-
-/** Simple key-value file persistence. Inlined to avoid a generic abstraction. */
-export interface TargetStore {
-  read(): Promise<string | null>;
-  write(targetId: string): Promise<void>;
-  remove(): Promise<void>;
-}
 
 /** Per-tab refs persistence (`refs.<targetId>.json`). */
 export interface RefsStore {
@@ -46,7 +39,6 @@ export interface ScraperAppDeps {
   userDataDir: string;
   readDevToolsActivePort(dir: string): Promise<{ port: number; wsPath: string }>;
   buildBrowserWsUrl(port: number, wsPath: string): string;
-  createBrowserConnection(wsUrl: string): Promise<CdpBrowserService>;
   createPageConnection(wsUrl: string, targetId: string): Promise<CdpPageService>;
   resolveTarget(
     target: ElementTarget,
@@ -58,7 +50,6 @@ export interface ScraperAppDeps {
   createSnapshotService(deps: SnapshotDeps): SnapshotService;
 
   // State persistence
-  targetStore: TargetStore;
   refsStore: RefsStore;
   refCounterStore: CounterStore;
 
@@ -74,42 +65,26 @@ export function createScraperApp(deps: ScraperAppDeps): ScraperApp {
     return deps.buildBrowserWsUrl(port, wsPath);
   }
 
-  /** Browser-level connection: used for listing / selecting pages. */
-  async function withBrowserConnection<T>(
-    fn: (browser: CdpBrowserService) => Promise<T>,
-  ): Promise<T> {
-    const wsUrl = await browserWsUrl();
-    const browser = await deps.createBrowserConnection(wsUrl);
-    try {
-      return await fn(browser);
-    } finally {
-      browser.close();
-    }
-  }
-
-  /** Page-level connection: requires a previously selected target. */
+  /**
+   * Attach to `targetId`, run `fn`, and always close the page connection.
+   * Clears stale refs for that tab when Chrome reports the target is gone.
+   */
   async function withPageConnection<T>(
-    fn: (page: CdpPageService, targetId: string) => Promise<T>,
+    targetId: string,
+    fn: (page: CdpPageService) => Promise<T>,
   ): Promise<T> {
-    const targetId = await deps.targetStore.read();
-    if (!targetId) {
-      throw new Error("no page selected");
-    }
     const wsUrl = await browserWsUrl();
     let page: CdpPageService;
     try {
       page = await deps.createPageConnection(wsUrl, targetId);
     } catch (err) {
-      // Chrome restarted or the tab was closed — clear the stale target so the
-      // next command can re-select instead of failing with the same error.
       if (err instanceof Error && err.message.includes("target no longer exists")) {
-        await deps.targetStore.remove();
         await deps.refsStore.remove(targetId);
       }
       throw err;
     }
     try {
-      return await fn(page, targetId);
+      return await fn(page);
     } finally {
       page.close();
     }
@@ -207,27 +182,9 @@ export function createScraperApp(deps: ScraperAppDeps): ScraperApp {
     }
   }
 
-  async function listPages(): Promise<PageInfo[]> {
-    return await withBrowserConnection(async (browser) => {
-      const targetId = await deps.targetStore.read();
-      return await browser.listPages(targetId ?? undefined);
-    });
-  }
-
-  async function selectPage(pageId: string): Promise<void> {
-    await withBrowserConnection(async (browser) => {
-      const pages = await browser.listPages();
-      const found = pages.find((p) => p.pageId === pageId);
-      if (!found) {
-        throw new Error(`no page with id '${pageId}'`);
-      }
-      await deps.targetStore.write(pageId);
-    });
-  }
-
   return {
-    navigate(url: string, opts?: ActionOptions) {
-      return withPageConnection(async (page, targetId) => {
+    navigate(targetId: string, url: string, opts?: ActionOptions) {
+      return withPageConnection(targetId, async (page) => {
         return await withDialogHandling(page, async () => {
           await page.navigate(url);
           if (opts?.includeSnapshot) {
@@ -244,19 +201,17 @@ export function createScraperApp(deps: ScraperAppDeps): ScraperApp {
         });
       });
     },
-    snapshot(opts) {
-      return withPageConnection((page, targetId) => doSnapshot(page, targetId, opts));
+    snapshot(targetId, opts) {
+      return withPageConnection(targetId, (page) => doSnapshot(page, targetId, opts));
     },
-    evaluate(expression: string) {
-      return withPageConnection((page) => page.evaluate(expression));
+    evaluate(targetId: string, expression: string) {
+      return withPageConnection(targetId, (page) => page.evaluate(expression));
     },
-    screenshot(fullPage?: boolean) {
-      return withPageConnection((page) => page.screenshot(fullPage));
+    screenshot(targetId: string, fullPage?: boolean) {
+      return withPageConnection(targetId, (page) => page.screenshot(fullPage));
     },
-    pages: listPages,
-    selectPage,
-    upload(target: ElementTarget, filePath: string, opts?: ActionOptions) {
-      return withPageConnection(async (page, targetId) => {
+    upload(targetId: string, target: ElementTarget, filePath: string, opts?: ActionOptions) {
+      return withPageConnection(targetId, async (page) => {
         const refs = await deps.refsStore.read(targetId);
         const objectId = await deps.resolveTarget(target, page, refs);
         return await withDialogHandling(page, async () => {
@@ -265,8 +220,8 @@ export function createScraperApp(deps: ScraperAppDeps): ScraperApp {
         });
       });
     },
-    wait(request: WaitRequest) {
-      return withPageConnection(async (page, targetId) => {
+    wait(targetId: string, request: WaitRequest) {
+      return withPageConnection(targetId, async (page) => {
         switch (request.kind) {
           case "textInElement": {
             const refs = await deps.refsStore.read(targetId);

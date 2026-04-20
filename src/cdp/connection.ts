@@ -125,7 +125,7 @@ export async function createPageConnection(
     try {
       cdp.connection?.close();
     } catch { /* ignore */ }
-    throw new Error("target no longer exists — run 'scraper pages' to pick a new tab");
+    throw new Error("target no longer exists — run 'scraper tabs' to list current tabs");
   }
 
   await cdp.Page.enable(null, sessionId);

@@ -5,6 +5,13 @@ import type { ElementTarget, ScraperApp, WaitRequest } from "../domain/mod.ts";
 /** Dependencies injected from main.ts composition root. */
 export interface CliDeps {
   app: ScraperApp;
+  /**
+   * Resolve `--tab <input>` (a prefix or a full targetId) to the canonical
+   * full targetId by consulting Chrome's live tab list. Throws with the
+   * exact error text specified by the Tier B design (missing flag, no match,
+   * ambiguous prefix). Wired in `src/main.ts` via `canonicalizeTargetId`.
+   */
+  canonicalizeTab(input: string): Promise<string>;
   stdout(s: string): void;
   stderr(s: string): void;
 }
@@ -75,6 +82,25 @@ function flagBoolean(flags: Record<string, string | true>, key: string): boolean
   return flags[key] === true;
 }
 
+/**
+ * Resolve `--tab <input>` from the parsed flags to the canonical full targetId.
+ * Returns `[id, undefined]` on success, `[undefined, errorText]` on failure.
+ * All error text (missing flag, no match, ambiguous prefix) comes from
+ * `canonicalizeTab` per the Tier B design doc §Active Target Selection.
+ */
+async function resolveTabFlag(
+  flags: Record<string, string | true>,
+  deps: CliDeps,
+): Promise<[string | undefined, string | undefined]> {
+  const input = flagString(flags, "tab") ?? "";
+  try {
+    const canonical = await deps.canonicalizeTab(input);
+    return [canonical, undefined];
+  } catch (err) {
+    return [undefined, err instanceof Error ? err.message : String(err)];
+  }
+}
+
 /** Parse --ref or --selector from flags. Returns [target, error]. */
 function parseTarget(
   flags: Record<string, string | true>,
@@ -94,7 +120,7 @@ async function handleNavigate(args: string[], deps: CliDeps): Promise<number> {
   const { positional, flags } = parseFlags(args);
   const url = positional[0];
   if (!url) {
-    deps.stderr("error: url is required\nUsage: scraper navigate <url>\n");
+    deps.stderr("error: url is required\nUsage: scraper navigate --tab <targetId> <url>\n");
     return 1;
   }
 
@@ -103,10 +129,16 @@ async function handleNavigate(args: string[], deps: CliDeps): Promise<number> {
     return 1;
   }
 
+  const [targetId, tabErr] = await resolveTabFlag(flags, deps);
+  if (tabErr) {
+    deps.stderr(`error: ${tabErr}\n`);
+    return 1;
+  }
+
   const includeSnapshot = flagBoolean(flags, "snapshot");
 
   try {
-    const result = await deps.app.navigate(url, { includeSnapshot });
+    const result = await deps.app.navigate(targetId!, url, { includeSnapshot });
     if (result.snapshot) {
       deps.stderr(`navigated to ${url}\n`);
       deps.stdout(result.snapshot.yaml);
@@ -122,6 +154,11 @@ async function handleNavigate(args: string[], deps: CliDeps): Promise<number> {
 
 async function handleSnapshot(args: string[], deps: CliDeps): Promise<number> {
   const { flags } = parseFlags(args);
+  const [targetId, tabErr] = await resolveTabFlag(flags, deps);
+  if (tabErr) {
+    deps.stderr(`error: ${tabErr}\n`);
+    return 1;
+  }
   const [maxDepth, mdErr] = flagNumber(flags, "max-depth");
   if (mdErr) {
     deps.stderr(`error: ${mdErr}\n`);
@@ -135,7 +172,7 @@ async function handleSnapshot(args: string[], deps: CliDeps): Promise<number> {
   const selector = flagString(flags, "selector");
 
   try {
-    const result = await deps.app.snapshot({ maxDepth, maxNodes, selector });
+    const result = await deps.app.snapshot(targetId!, { maxDepth, maxNodes, selector });
     deps.stdout(result.yaml);
     return 0;
   } catch (err) {
@@ -145,15 +182,23 @@ async function handleSnapshot(args: string[], deps: CliDeps): Promise<number> {
 }
 
 async function handleEval(args: string[], deps: CliDeps): Promise<number> {
-  const { positional } = parseFlags(args);
+  const { positional, flags } = parseFlags(args);
   const expression = positional[0];
   if (!expression) {
-    deps.stderr("error: expression is required\nUsage: scraper eval '<expression>'\n");
+    deps.stderr(
+      "error: expression is required\nUsage: scraper eval --tab <targetId> '<expression>'\n",
+    );
+    return 1;
+  }
+
+  const [targetId, tabErr] = await resolveTabFlag(flags, deps);
+  if (tabErr) {
+    deps.stderr(`error: ${tabErr}\n`);
     return 1;
   }
 
   try {
-    const { result } = await deps.app.evaluate(expression);
+    const { result } = await deps.app.evaluate(targetId!, expression);
     deps.stdout(JSON.stringify(result, null, 2) + "\n");
     return 0;
   } catch (err) {
@@ -164,10 +209,15 @@ async function handleEval(args: string[], deps: CliDeps): Promise<number> {
 
 async function handleScreenshot(args: string[], deps: CliDeps): Promise<number> {
   const { flags } = parseFlags(args);
+  const [targetId, tabErr] = await resolveTabFlag(flags, deps);
+  if (tabErr) {
+    deps.stderr(`error: ${tabErr}\n`);
+    return 1;
+  }
   const fullPage = flagBoolean(flags, "full-page");
 
   try {
-    const path = await deps.app.screenshot(fullPage || undefined);
+    const path = await deps.app.screenshot(targetId!, fullPage || undefined);
     deps.stdout(path + "\n");
     return 0;
   } catch (err) {
@@ -192,7 +242,7 @@ async function handleWait(args: string[], deps: CliDeps): Promise<number> {
   if (!ref && !selector && !text) {
     deps.stderr(
       "error: at least one of --selector, --text, or --ref --text is required\n" +
-        "Usage: scraper wait --selector <css> | --text '<text>' | --ref <ref> --text '<text>'\n",
+        "Usage: scraper wait --tab <targetId> --selector <css> | --text '<text>' | --ref <ref> --text '<text>'\n",
     );
     return 1;
   }
@@ -204,6 +254,12 @@ async function handleWait(args: string[], deps: CliDeps): Promise<number> {
 
   if (ref && !text) {
     deps.stderr("error: --ref requires --text (a ref names an existing element)\n");
+    return 1;
+  }
+
+  const [targetId, tabErr] = await resolveTabFlag(flags, deps);
+  if (tabErr) {
+    deps.stderr(`error: ${tabErr}\n`);
     return 1;
   }
 
@@ -219,7 +275,7 @@ async function handleWait(args: string[], deps: CliDeps): Promise<number> {
   }
 
   try {
-    await deps.app.wait(request);
+    await deps.app.wait(targetId!, request);
     if (request.kind === "textInElement") {
       const label = "ref" in request.target
         ? `ref ${request.target.ref}`
@@ -242,7 +298,7 @@ async function handleUpload(args: string[], deps: CliDeps): Promise<number> {
   const [target, targetErr] = parseTarget(flags);
   if (targetErr) {
     deps.stderr(
-      `error: ${targetErr}\nUsage: scraper upload --ref <ref> | --selector <css> <path>\n`,
+      `error: ${targetErr}\nUsage: scraper upload --tab <targetId> --ref <ref> | --selector <css> <path>\n`,
     );
     return 1;
   }
@@ -250,7 +306,7 @@ async function handleUpload(args: string[], deps: CliDeps): Promise<number> {
   const filePath = positional[0];
   if (filePath === undefined) {
     deps.stderr(
-      "error: file path is required\nUsage: scraper upload --ref <ref> <path>\n",
+      "error: file path is required\nUsage: scraper upload --tab <targetId> --ref <ref> <path>\n",
     );
     return 1;
   }
@@ -260,10 +316,16 @@ async function handleUpload(args: string[], deps: CliDeps): Promise<number> {
     return 1;
   }
 
+  const [targetId, tabErr] = await resolveTabFlag(flags, deps);
+  if (tabErr) {
+    deps.stderr(`error: ${tabErr}\n`);
+    return 1;
+  }
+
   const includeSnapshot = flagBoolean(flags, "snapshot");
 
   try {
-    const result = await deps.app.upload(target!, filePath, { includeSnapshot });
+    const result = await deps.app.upload(targetId!, target!, filePath, { includeSnapshot });
     const label = "ref" in target! ? `ref ${target!.ref}` : `selector "${target!.selector}"`;
     if (result.snapshot) {
       deps.stderr(`uploaded to ${label}\n`);
