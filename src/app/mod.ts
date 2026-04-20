@@ -76,6 +76,16 @@ export interface ScraperAppDeps {
   artifactCounterStore: CounterStore;
   artifactStore: ArtifactStore;
 
+  /**
+   * Serialize access to `~/.scraper/` state across concurrent CLI invocations.
+   * The app wraps each counter-allocating region (snapshot, screenshot) in this
+   * so two parallel `scraper snapshot` processes cannot interleave their
+   * read-modify-write on `counter` / `counter-refs` and mint the same `sN` or
+   * overlapping ref ranges. Implemented in `main.ts` with an exclusive
+   * advisory flock on `~/.scraper/state.lock`.
+   */
+  withStateLock<T>(fn: () => Promise<T>): Promise<T>;
+
   // Warning output
   warn(msg: string): void;
 }
@@ -125,48 +135,48 @@ export function createScraperApp(deps: ScraperAppDeps): ScraperApp {
     });
   }
 
-  /** Reserve the next artifact id (monotonic across snapshots and screenshots). */
-  async function nextArtifactCounter(): Promise<number> {
-    const current = await deps.artifactCounterStore.read();
-    const next = current + 1;
-    await deps.artifactCounterStore.write(next);
-    return next;
-  }
-
-  /** Run snapshot pipeline and persist refs + monotonic counters + YAML file. */
-  async function doSnapshot(
+  /**
+   * Run snapshot pipeline and persist refs + monotonic counters + YAML file.
+   * The entire read-ref-counter → mint artifact id → snapshot → write-refs
+   * sequence runs under `withStateLock` so two concurrent `scraper snapshot`
+   * processes cannot allocate the same `sN` or overlapping ref ranges.
+   */
+  function doSnapshot(
     page: CdpPageService,
     targetId: string,
     opts?: { maxDepth?: number; maxNodes?: number; selector?: string },
     dialog: SnapshotDialog | null = null,
   ) {
-    const snapshotSvc = snapshotServiceFor(page);
-    const startingRefCounter = await deps.refCounterStore.read();
-    const artifactN = await nextArtifactCounter();
-    const snapshotId = `s${artifactN}`;
-    const { url, title } = await page.getPageInfo();
-    const result = await snapshotSvc.snapshot({
-      ...(opts ?? {}),
-      startingRefCounter,
-      snapshotId,
-      targetId,
-      url,
-      title,
-      dialog,
+    return deps.withStateLock(async () => {
+      const snapshotSvc = snapshotServiceFor(page);
+      const startingRefCounter = await deps.refCounterStore.read();
+      const artifactN = (await deps.artifactCounterStore.read()) + 1;
+      await deps.artifactCounterStore.write(artifactN);
+      const snapshotId = `s${artifactN}`;
+      const { url, title } = await page.getPageInfo();
+      const result = await snapshotSvc.snapshot({
+        ...(opts ?? {}),
+        startingRefCounter,
+        snapshotId,
+        targetId,
+        url,
+        title,
+        dialog,
+      });
+      if (result.lastRefCounter !== startingRefCounter) {
+        await deps.refCounterStore.write(result.lastRefCounter);
+      }
+      // Always overwrite per the design: `refs.<targetId>.json` is overwritten
+      // by that tab's next snapshot. A snapshot that mints no refs must still
+      // clear any prior refs for this tab so stale handles cannot resolve.
+      if (Object.keys(result.refs).length > 0) {
+        await deps.refsStore.write(targetId, result.refs, snapshotId);
+      } else {
+        await deps.refsStore.remove(targetId);
+      }
+      await deps.artifactStore.writeSnapshot(snapshotId, result.yaml);
+      return result;
     });
-    if (result.lastRefCounter !== startingRefCounter) {
-      await deps.refCounterStore.write(result.lastRefCounter);
-    }
-    // Always overwrite per the design: `refs.<targetId>.json` is overwritten
-    // by that tab's next snapshot. A snapshot that mints no refs must still
-    // clear any prior refs for this tab so stale handles cannot resolve.
-    if (Object.keys(result.refs).length > 0) {
-      await deps.refsStore.write(targetId, result.refs, snapshotId);
-    } else {
-      await deps.refsStore.remove(targetId);
-    }
-    await deps.artifactStore.writeSnapshot(snapshotId, result.yaml);
-    return result;
   }
 
   /** Execute post-action pipeline: network idle wait + optional snapshot. */
@@ -341,9 +351,16 @@ export function createScraperApp(deps: ScraperAppDeps): ScraperApp {
     },
     screenshot(targetId: string) {
       return withPageConnection(targetId, async (page) => {
+        // Chrome round-trip runs outside the lock — only the counter
+        // allocation + disk write need to be serialized. Holding the lock
+        // across the screenshot capture would needlessly block other
+        // invocations for the duration of Chrome's CaptureScreenshot call.
         const png = await page.screenshot();
-        const artifactN = await nextArtifactCounter();
-        return await deps.artifactStore.writeScreenshot(`shot${artifactN}`, png);
+        return await deps.withStateLock(async () => {
+          const artifactN = (await deps.artifactCounterStore.read()) + 1;
+          await deps.artifactCounterStore.write(artifactN);
+          return await deps.artifactStore.writeScreenshot(`shot${artifactN}`, png);
+        });
       });
     },
     upload(targetId: string, target: ElementTarget, filePath: string, opts?: ActionOptions) {
@@ -376,7 +393,18 @@ export function createScraperApp(deps: ScraperAppDeps): ScraperApp {
           switch (request.kind) {
             case "textInElement": {
               const refs = await deps.refsStore.read(targetId);
-              const objectId = await deps.resolveTarget(request.target, page, refs);
+              // Match eval/upload's stale-ref contract: a missing `--ref eN`
+              // surfaces the canonical stale-ref error (pointing at
+              // refs.<targetId>.json) instead of resolveTarget's lower-level
+              // "unknown ref" text. Keeps the "run snapshot, retry" recovery
+              // loop uniform across every ref-consuming command.
+              const target = request.target;
+              if ("ref" in target && !(refs && target.ref in refs)) {
+                throw new Error(
+                  formatStaleRefError(target.ref, targetId, refs ? Object.keys(refs) : []),
+                );
+              }
+              const objectId = await deps.resolveTarget(target, page, refs);
               await page.waitForTextInElement(objectId, request.text, request.timeoutMs);
               break;
             }

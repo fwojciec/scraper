@@ -28,6 +28,7 @@ if (!HOME) throw new Error("HOME environment variable is not set");
 const STATE_DIR = `${HOME}/.scraper`;
 const REF_COUNTER_PATH = `${STATE_DIR}/counter-refs`;
 const ARTIFACT_COUNTER_PATH = `${STATE_DIR}/counter`;
+const STATE_LOCK_PATH = `${STATE_DIR}/state.lock`;
 const refsPathFor = (targetId: string) => `${STATE_DIR}/refs.${targetId}.json`;
 const snapshotPathFor = (snapshotId: string) => `${STATE_DIR}/${snapshotId}.yaml`;
 const screenshotPathFor = (screenshotId: string) => `${STATE_DIR}/${screenshotId}.png`;
@@ -97,6 +98,28 @@ function createCounterStore(path: string): CounterStore {
 
 const refCounterStore = createCounterStore(REF_COUNTER_PATH);
 const artifactCounterStore = createCounterStore(ARTIFACT_COUNTER_PATH);
+
+/**
+ * Exclusive advisory lock on `~/.scraper/state.lock` — serializes
+ * counter-allocating regions (`snapshot`, `screenshot`) across concurrent CLI
+ * invocations so they cannot interleave their read-modify-write on
+ * `counter` / `counter-refs` and mint colliding `sN` artifacts or overlapping
+ * ref ranges. Uses `Deno.FsFile.lock()` (stable in Deno 2+).
+ */
+async function withStateLock<T>(fn: () => Promise<T>): Promise<T> {
+  await Deno.mkdir(STATE_DIR, { recursive: true });
+  const file = await Deno.open(STATE_LOCK_PATH, { read: true, write: true, create: true });
+  try {
+    await file.lock(true);
+    try {
+      return await fn();
+    } finally {
+      await file.unlock();
+    }
+  } finally {
+    file.close();
+  }
+}
 
 /**
  * Retention policy for `~/.scraper/` — Tier B design §Cleanup:
@@ -199,6 +222,7 @@ const app = createScraperApp({
   refCounterStore,
   artifactCounterStore,
   artifactStore,
+  withStateLock,
   warn: (s) => Deno.stderr.writeSync(encoder.encode(s)),
 });
 
