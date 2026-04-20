@@ -13,6 +13,18 @@ import { createWaitMethods } from "./wait.ts";
 export interface CdpPageService {
   navigate(url: string): Promise<void>;
   evaluate(expression: string): Promise<EvalResult>;
+  /**
+   * Evaluate `expression` with a `$ref(name)` helper pre-bound to the given
+   * objectIds. Runs via `Runtime.callFunctionOn` so the objectIds survive into
+   * the remote scope; the expression itself is executed via direct `eval` in
+   * that scope, so it may be a multi-statement script just like
+   * `Runtime.evaluate`. At least one ref must be supplied — callers take the
+   * no-ref path through `evaluate` instead.
+   */
+  evaluateWithRefs(
+    expression: string,
+    refObjectIds: Record<string, string>,
+  ): Promise<EvalResult>;
   /** Capture a PNG screenshot. Returns raw bytes so callers control naming. */
   screenshot(fullPage?: boolean): Promise<Uint8Array>;
   /** Current URL and title of the attached page, read via `Target.getTargetInfo`. */
@@ -214,6 +226,65 @@ export async function createPageConnection(
     return { result: response.result.value };
   }
 
+  async function evaluateWithRefs(
+    expression: string,
+    refObjectIds: Record<string, string>,
+  ): Promise<EvalResult> {
+    const refNames = Object.keys(refObjectIds);
+    if (refNames.length === 0) {
+      // Should never happen — callers use `evaluate` for the no-ref path.
+      return await evaluate(expression);
+    }
+    const argNames = refNames.map((_, i) => `__r${i}`);
+    const refMapLiteral = "{" +
+      refNames.map((n, i) => `${JSON.stringify(n)}:${argNames[i]}`).join(",") +
+      "}";
+    // Function body: bind each objectId argument by name into a ref map, then
+    // expose `$ref` as a lookup closure. User expression is run via direct
+    // `eval` so it sees `$ref` in the enclosing (non-strict) function scope
+    // and can be a full script (same semantics as Runtime.evaluate for the
+    // no-ref path).
+    const functionDeclaration = `function(__expr, ${argNames.join(",")}) {
+      const __refMap = ${refMapLiteral};
+      const $ref = function(name) {
+        if (Object.prototype.hasOwnProperty.call(__refMap, name)) return __refMap[name];
+        throw new Error("ref " + name + " was not bound");
+      };
+      return eval(__expr);
+    }`;
+    // callFunctionOn needs an objectId (for `this`) or an executionContextId.
+    // We have objectIds on hand, so anchor on the first one and ignore `this`
+    // inside the body. Any of the refs would work — the call does not depend
+    // on which element `this` points to. This assumes every resolved ref lives
+    // in the same JS world, which holds for single-frame pages; cross-frame
+    // refs (iframes, shadow DOM) are explicitly out of scope for Tier B and
+    // will require per-context resolution when they land.
+    const anchorObjectId = refObjectIds[refNames[0]];
+    const args = [
+      { value: expression },
+      ...refNames.map((n) => ({ objectId: refObjectIds[n] })),
+    ];
+    const response = await cdp.Runtime.callFunctionOn(
+      {
+        objectId: anchorObjectId,
+        functionDeclaration,
+        arguments: args,
+        returnByValue: true,
+        awaitPromise: true,
+      },
+      sessionId,
+    );
+
+    if (response.exceptionDetails) {
+      const msg = response.exceptionDetails.exception?.description ??
+        response.exceptionDetails.text ??
+        "Evaluation failed";
+      throw new Error(msg);
+    }
+
+    return { result: response.result.value };
+  }
+
   async function screenshot(fullPage?: boolean): Promise<Uint8Array> {
     let clip:
       | { x: number; y: number; width: number; height: number; scale: number }
@@ -351,6 +422,7 @@ export async function createPageConnection(
   return {
     navigate,
     evaluate,
+    evaluateWithRefs,
     screenshot,
     getPageInfo,
     getFullAXTree,

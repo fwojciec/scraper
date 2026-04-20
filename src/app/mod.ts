@@ -7,10 +7,12 @@
 
 import type { CdpBrowserService, CdpPageService } from "../cdp/mod.ts";
 import type { SnapshotDeps } from "../aria/mod.ts";
+import { formatStaleRefError, scanRefs } from "../domain/eval.ts";
 import type {
   ActionOptions,
   ActionResult,
   ElementTarget,
+  EvalResult,
   NavigateNewResult,
   RefMap,
   ScraperApp,
@@ -292,7 +294,23 @@ export function createScraperApp(deps: ScraperAppDeps): ScraperApp {
       return withPageConnection(targetId, (page) => doSnapshot(page, targetId, opts));
     },
     evaluate(targetId: string, expression: string) {
-      return withPageConnection(targetId, (page) => page.evaluate(expression));
+      return withPageConnection(targetId, async (page): Promise<EvalResult> => {
+        const refNames = scanRefs(expression);
+        if (refNames.length === 0) return await page.evaluate(expression);
+        const refs = (await deps.refsStore.read(targetId)) ?? {};
+        for (const name of refNames) {
+          if (!(name in refs)) {
+            throw new Error(formatStaleRefError(name, targetId, Object.keys(refs)));
+          }
+        }
+        // Resolve each ref once, preserving scan order so stale-ref errors
+        // surface with the first offending ref rather than a late one.
+        const resolved: Record<string, string> = {};
+        for (const name of refNames) {
+          resolved[name] = await page.resolveRef(refs[name], name);
+        }
+        return await page.evaluateWithRefs(expression, resolved);
+      });
     },
     screenshot(targetId: string, fullPage?: boolean) {
       return withPageConnection(targetId, async (page) => {

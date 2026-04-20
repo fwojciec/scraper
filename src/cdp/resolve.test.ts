@@ -6,6 +6,7 @@ function stubPage(overrides: Partial<CdpPageService> = {}): CdpPageService {
   return {
     navigate: () => Promise.resolve(),
     evaluate: () => Promise.resolve({ result: null }),
+    evaluateWithRefs: () => Promise.resolve({ result: null }),
     screenshot: () => Promise.resolve(new Uint8Array()),
     getPageInfo: () => Promise.resolve({ url: "", title: "" }),
     getFullAXTree: () => Promise.resolve([]),

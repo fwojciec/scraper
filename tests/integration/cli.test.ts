@@ -56,6 +56,77 @@ Deno.test("CLI E2E: attach → navigate → snapshot → eval → screenshot", a
   }
 });
 
+Deno.test("CLI E2E: eval resolves $ref to a live DOM element from refs.<targetId>.json", async () => {
+  const rt = await startTestRuntime();
+  const fixtures = startFixtureServer();
+  try {
+    await runScraper(
+      ["navigate", "--tab", rt.targetId, fixtures.url("actions.html")],
+      rt.env,
+    );
+    const snap = await runScraper(["snapshot", "--tab", rt.targetId], rt.env);
+    assertEquals(snap.code, 0, `snapshot failed: ${snap.stderr}`);
+    // Read back the refs file to pick a real textbox ref for the form's
+    // "Name" input — ref numbering is monotonic across tabs so the ref
+    // number is not hardcodable across test runs.
+    const refsPath = `${rt.tmpHome}/.scraper/refs.${rt.targetId}.json`;
+    const refsJson = JSON.parse(await Deno.readTextFile(refsPath)) as {
+      refs: Record<string, number>;
+    };
+    const refToken = Object.keys(refsJson.refs)[0];
+    assert(refToken?.startsWith("e"), `expected an ref token, got: ${refToken}`);
+
+    // Mutate the element through $ref, then read back through $ref to prove the
+    // same node is resolved on both calls.
+    const set = await runScraper(
+      ["eval", "--tab", rt.targetId, `$ref("${refToken}").setAttribute("data-x", "yes")`],
+      rt.env,
+    );
+    assertEquals(set.code, 0, `eval set failed: ${set.stderr}`);
+
+    const get = await runScraper(
+      ["eval", "--tab", rt.targetId, `$ref("${refToken}").getAttribute("data-x")`],
+      rt.env,
+    );
+    assertEquals(get.code, 0, `eval get failed: ${get.stderr}`);
+    assertStringIncludes(get.stdout, '"yes"');
+  } finally {
+    await fixtures.close();
+    await stopTestRuntime(rt);
+  }
+});
+
+Deno.test("CLI E2E: eval with a stale $ref prints the design-doc error and exits 1", async () => {
+  const rt = await startTestRuntime();
+  const fixtures = startFixtureServer();
+  try {
+    await runScraper(
+      ["navigate", "--tab", rt.targetId, fixtures.url("actions.html")],
+      rt.env,
+    );
+    await runScraper(["snapshot", "--tab", rt.targetId], rt.env);
+    // Any ref counter far above anything a single snapshot would mint on the
+    // fixture is guaranteed stale — the monotonic counter ensures a ref that
+    // "should exist" is either in the current refs file or nowhere at all.
+    const stale = await runScraper(
+      ["eval", "--tab", rt.targetId, `$ref("e9999").click()`],
+      rt.env,
+    );
+    assertEquals(stale.code, 1);
+    assertStringIncludes(
+      stale.stderr,
+      `ref e9999 is stale — not in refs.${rt.targetId}.json (current refs:`,
+    );
+    assertStringIncludes(
+      stale.stderr,
+      `Run \`scraper snapshot --tab ${rt.targetId}\``,
+    );
+  } finally {
+    await fixtures.close();
+    await stopTestRuntime(rt);
+  }
+});
+
 Deno.test("CLI E2E: start/stop commands no longer exist", async () => {
   const rt = await startTestRuntime();
   try {

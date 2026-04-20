@@ -82,6 +82,7 @@ function stubPage(overrides: Partial<CdpPageService> = {}): CdpPageService {
   return {
     navigate: () => Promise.resolve(),
     evaluate: () => Promise.resolve({ result: undefined }),
+    evaluateWithRefs: () => Promise.resolve({ result: undefined }),
     screenshot: () => Promise.resolve(new Uint8Array([1, 2, 3])),
     getPageInfo: () => Promise.resolve({ url: "https://example.com/", title: "Example" }),
     getFullAXTree: () => Promise.resolve([]),
@@ -729,6 +730,113 @@ Deno.test("wait: text delegates to page.waitForText", async () => {
   assertEquals(waitedText, "hello");
 });
 
+// ---------------------------------------------------------------------------
+// evaluate
+// ---------------------------------------------------------------------------
+
+Deno.test("evaluate: no $ref falls through to page.evaluate with the raw expression", async () => {
+  let receivedExpr = "";
+  let callsWithRefs = 0;
+  const page = stubPage({
+    evaluate: (expr) => {
+      receivedExpr = expr;
+      return Promise.resolve({ result: 42 });
+    },
+    evaluateWithRefs: () => {
+      callsWithRefs++;
+      return Promise.resolve({ result: 0 });
+    },
+  });
+  const deps = createDeps({
+    createPageConnection: () => Promise.resolve(page),
+  });
+  const app = createScraperApp(deps);
+  const { result } = await app.evaluate("t1", "document.title");
+  assertEquals(receivedExpr, "document.title");
+  assertEquals(result, 42);
+  assertEquals(callsWithRefs, 0);
+});
+
+Deno.test("evaluate: with $ref resolves backendNodeIds and dispatches evaluateWithRefs", async () => {
+  let resolvedRef: { backendNodeId: number; refName: string } | null = null;
+  const page = stubPage({
+    resolveRef: (backendNodeId, refName) => {
+      resolvedRef = { backendNodeId, refName };
+      return Promise.resolve("obj-e3");
+    },
+    evaluateWithRefs: (expr, refs) => {
+      assertEquals(expr, `$ref("e3").value`);
+      assertEquals(refs, { e3: "obj-e3" });
+      return Promise.resolve({ result: "hello" });
+    },
+  });
+  const deps = createDeps({
+    createPageConnection: () => Promise.resolve(page),
+  });
+  deps.refsStore.data = {
+    t1: { refs: { e3: 77 }, snapshotId: "s4" },
+  };
+  const app = createScraperApp(deps);
+  const { result } = await app.evaluate("t1", `$ref("e3").value`);
+  assertEquals(resolvedRef, { backendNodeId: 77, refName: "e3" });
+  assertEquals(result, "hello");
+});
+
+Deno.test("evaluate: $ref missing from refs file throws the exact design-doc stale-ref error", async () => {
+  const deps = createDeps({
+    createPageConnection: () => Promise.resolve(stubPage()),
+  });
+  deps.refsStore.data = {
+    "4AE7B2C9E1D4F0A2B8C6E1F3A5D9B7C2": {
+      refs: { e15: 100, e16: 101, e22: 102 },
+      snapshotId: "s9",
+    },
+  };
+  const app = createScraperApp(deps);
+  await assertRejects(
+    () => app.evaluate("4AE7B2C9E1D4F0A2B8C6E1F3A5D9B7C2", `$ref("e3").click()`),
+    Error,
+    "ref e3 is stale — not in refs.4AE7B2C9E1D4F0A2B8C6E1F3A5D9B7C2.json (current refs: e15..e22).",
+  );
+});
+
+Deno.test("evaluate: $ref with no refs file at all reports `(current refs: none)`", async () => {
+  const deps = createDeps({
+    createPageConnection: () => Promise.resolve(stubPage()),
+  });
+  const app = createScraperApp(deps);
+  await assertRejects(
+    () => app.evaluate("TID", `$ref("e3")`),
+    Error,
+    "ref e3 is stale — not in refs.TID.json (current refs: none).",
+  );
+});
+
+Deno.test("evaluate: dedupes repeated refs and preserves argument order", async () => {
+  const resolvedBackendIds: number[] = [];
+  let receivedRefs: Record<string, string> | undefined;
+  const page = stubPage({
+    resolveRef: (backendNodeId) => {
+      resolvedBackendIds.push(backendNodeId);
+      return Promise.resolve(`obj-${backendNodeId}`);
+    },
+    evaluateWithRefs: (_expr, refs) => {
+      receivedRefs = refs;
+      return Promise.resolve({ result: null });
+    },
+  });
+  const deps = createDeps({
+    createPageConnection: () => Promise.resolve(page),
+  });
+  deps.refsStore.data = {
+    t1: { refs: { e3: 30, e8: 80 }, snapshotId: "s1" },
+  };
+  const app = createScraperApp(deps);
+  await app.evaluate("t1", `$ref("e8").value = $ref("e3").textContent; $ref("e8").focus();`);
+  // Scanned in order of first appearance: e8, e3. Each resolved exactly once.
+  assertEquals(resolvedBackendIds, [80, 30]);
+  assertEquals(receivedRefs, { e8: "obj-80", e3: "obj-30" });
+});
 // ---------------------------------------------------------------------------
 // connection lifecycle
 // ---------------------------------------------------------------------------
