@@ -25,8 +25,8 @@ export interface CdpPageService {
     expression: string,
     refObjectIds: Record<string, string>,
   ): Promise<EvalResult>;
-  /** Capture a PNG screenshot. Returns raw bytes so callers control naming. */
-  screenshot(fullPage?: boolean): Promise<Uint8Array>;
+  /** Capture a PNG screenshot of the viewport. Returns raw bytes so callers control naming. */
+  screenshot(): Promise<Uint8Array>;
   /** Current URL and title of the attached page, read via `Target.getTargetInfo`. */
   getPageInfo(): Promise<{ url: string; title: string }>;
   close(): void;
@@ -285,26 +285,11 @@ export async function createPageConnection(
     return { result: response.result.value };
   }
 
-  async function screenshot(fullPage?: boolean): Promise<Uint8Array> {
-    let clip:
-      | { x: number; y: number; width: number; height: number; scale: number }
-      | undefined;
-    if (fullPage) {
-      const metrics = await cdp.Page.getLayoutMetrics(null, sessionId);
-      clip = {
-        x: 0,
-        y: 0,
-        width: metrics.contentSize.width,
-        height: metrics.contentSize.height,
-        scale: 1,
-      };
-    }
-
+  async function screenshot(): Promise<Uint8Array> {
     const { data } = await cdp.Page.captureScreenshot(
-      { format: "png", ...(clip ? { clip } : {}) },
+      { format: "png" },
       sessionId,
     );
-
     return Uint8Array.from(atob(data), (c) => c.charCodeAt(0));
   }
 

@@ -312,9 +312,9 @@ export function createScraperApp(deps: ScraperAppDeps): ScraperApp {
         return await page.evaluateWithRefs(expression, resolved);
       });
     },
-    screenshot(targetId: string, fullPage?: boolean) {
+    screenshot(targetId: string) {
       return withPageConnection(targetId, async (page) => {
-        const png = await page.screenshot(fullPage);
+        const png = await page.screenshot();
         const artifactN = await nextArtifactCounter();
         return await deps.artifactStore.writeScreenshot(`shot${artifactN}`, png);
       });

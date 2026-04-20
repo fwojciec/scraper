@@ -598,23 +598,6 @@ Deno.test("screenshot prints path", async () => {
   assertEquals(io.out, "/tmp/shot.png\n");
 });
 
-Deno.test("screenshot passes --full-page option", async () => {
-  let receivedFullPage: boolean | undefined;
-  const code = await runCli(
-    ["screenshot", "--tab", "4AE7", "--full-page"],
-    stubDeps({
-      app: {
-        screenshot: (_targetId, fullPage) => {
-          receivedFullPage = fullPage;
-          return Promise.resolve("/tmp/shot.png");
-        },
-      },
-    }),
-  );
-  assertEquals(code, 0);
-  assertEquals(receivedFullPage, true);
-});
-
 Deno.test("screenshot reports error from dep", async () => {
   const io = capture();
   const code = await runCli(

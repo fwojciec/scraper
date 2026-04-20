@@ -34,7 +34,7 @@ export interface ScraperApp {
   navigateNew(url: string): Promise<NavigateNewResult>;
   snapshot(targetId: string, options: SnapshotOptions): Promise<SnapshotResult>;
   evaluate(targetId: string, expression: string): Promise<EvalResult>;
-  screenshot(targetId: string, fullPage?: boolean): Promise<string>;
+  screenshot(targetId: string): Promise<string>;
   upload(
     targetId: string,
     target: ElementTarget,

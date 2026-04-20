@@ -46,7 +46,7 @@ Commands:
 `;
 
 /** Flags that never take a value argument. */
-const BOOLEAN_FLAGS = new Set(["snapshot", "full-page", "new"]);
+const BOOLEAN_FLAGS = new Set(["snapshot", "new"]);
 
 function parseFlags(
   args: string[],
@@ -94,10 +94,6 @@ function flagNumber(
   const n = Number(val);
   if (Number.isNaN(n)) return [undefined, `--${key} must be a number, got '${val}'`];
   return [n, undefined];
-}
-
-function flagBoolean(flags: Record<string, string | true>, key: string): boolean {
-  return flags[key] === true;
 }
 
 /**
@@ -298,10 +294,9 @@ async function handleScreenshot(args: string[], deps: CliDeps): Promise<number> 
     deps.stderr(`error: ${tabErr}\n`);
     return 1;
   }
-  const fullPage = flagBoolean(flags, "full-page");
 
   try {
-    const path = await deps.app.screenshot(targetId!, fullPage || undefined);
+    const path = await deps.app.screenshot(targetId!);
     deps.stdout(path + "\n");
     return 0;
   } catch (err) {
