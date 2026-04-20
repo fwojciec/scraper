@@ -2,6 +2,13 @@
 
 import type { ElementTarget, ScraperApp, WaitRequest } from "../domain/mod.ts";
 
+/** A single page tab as returned by `listTabs` — only page-type targets. */
+export interface TabInfo {
+  id: string;
+  url: string;
+  title: string;
+}
+
 /** Dependencies injected from main.ts composition root. */
 export interface CliDeps {
   app: ScraperApp;
@@ -12,6 +19,16 @@ export interface CliDeps {
    * ambiguous prefix). Wired in `src/main.ts` via `canonicalizeTargetId`.
    */
   canonicalizeTab(input: string): Promise<string>;
+  /**
+   * List live page tabs via Chrome's `/json/list` (filtered to `type === "page"`).
+   * Used by `scraper tabs` to render and to seed dead-refs cleanup.
+   */
+  listTabs(): Promise<TabInfo[]>;
+  /**
+   * Delete `refs.<targetId>.json` files whose targetId is not in `liveIds` —
+   * opportunistic cleanup of leftover per-tab ref state after tabs close.
+   */
+  cleanupDeadRefs(liveIds: readonly string[]): Promise<void>;
   stdout(s: string): void;
   stderr(s: string): void;
 }
@@ -19,6 +36,7 @@ export interface CliDeps {
 const USAGE = `Usage: scraper <command> [options]
 
 Commands:
+  tabs        List open page tabs (full targetId, URL, title)
   navigate    Navigate to a URL
   snapshot    Generate an ARIA snapshot
   eval        Evaluate JavaScript
@@ -340,6 +358,29 @@ async function handleUpload(args: string[], deps: CliDeps): Promise<number> {
   }
 }
 
+async function handleTabs(_args: string[], deps: CliDeps): Promise<number> {
+  let tabs: TabInfo[];
+  try {
+    tabs = await deps.listTabs();
+  } catch (err) {
+    deps.stderr(`error: ${err instanceof Error ? err.message : err}\n`);
+    return 1;
+  }
+  // Full id first so agents can split on whitespace and take field 0.
+  // Title is JSON-encoded so embedded whitespace/quotes/newlines are unambiguous.
+  for (const t of tabs) {
+    deps.stdout(`${t.id}\t${t.url}\t${JSON.stringify(t.title)}\n`);
+  }
+  // Cleanup runs only after a successful list so a transient listTabs failure
+  // cannot wipe every tab's refs. See design doc §State and Filesystem.
+  try {
+    await deps.cleanupDeadRefs(tabs.map((t) => t.id));
+  } catch (err) {
+    deps.stderr(`warning: dead-refs cleanup failed: ${err instanceof Error ? err.message : err}\n`);
+  }
+  return 0;
+}
+
 /** Run the CLI with the given arguments and dependencies. Returns exit code. */
 export function runCli(args: string[], deps: CliDeps): Promise<number> {
   const [command, ...rest] = args;
@@ -350,6 +391,8 @@ export function runCli(args: string[], deps: CliDeps): Promise<number> {
   }
 
   switch (command) {
+    case "tabs":
+      return handleTabs(rest, deps);
     case "navigate":
       return handleNavigate(rest, deps);
     case "snapshot":

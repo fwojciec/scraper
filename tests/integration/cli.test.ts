@@ -212,3 +212,77 @@ Deno.test("CLI: unknown --tab prefix reports no-match error", async () => {
     await stopTestRuntime(rt);
   }
 });
+
+Deno.test("CLI: tabs prints full targetId + URL + title for the live page tab", async () => {
+  const rt = await startTestRuntime();
+  const fixtures = startFixtureServer();
+  try {
+    await runScraper(
+      ["navigate", "--tab", rt.targetId, fixtures.url("bestseller-table.html")],
+      rt.env,
+    );
+    const result = await runScraper(["tabs"], rt.env);
+    assertEquals(result.code, 0, `tabs failed: ${result.stderr}`);
+    const lines = result.stdout.split("\n").filter((l) => l.length > 0);
+    const line = lines.find((l) => l.startsWith(rt.targetId));
+    assert(line !== undefined, `expected a line starting with targetId, got: ${result.stdout}`);
+    assertStringIncludes(line, "bestseller-table.html");
+    // Titles are JSON-encoded so an empty-title tab still renders a visible `""`.
+    assertStringIncludes(line, '"');
+  } finally {
+    await fixtures.close();
+    await stopTestRuntime(rt);
+  }
+});
+
+Deno.test("CLI: tabs removes refs.<targetId>.json for targetIds no longer in /json/list", async () => {
+  const rt = await startTestRuntime();
+  const fixtures = startFixtureServer();
+  try {
+    // Create real refs for the live tab so we can confirm cleanup spares it.
+    await runScraper(
+      ["navigate", "--tab", rt.targetId, fixtures.url("bestseller-table.html")],
+      rt.env,
+    );
+    await runScraper(["snapshot", "--tab", rt.targetId], rt.env);
+    const liveRefs = `${rt.tmpHome}/.scraper/refs.${rt.targetId}.json`;
+    await Deno.stat(liveRefs);
+
+    // Plant a refs file for a fake, long-dead targetId.
+    const deadId = "DEADBEEF00000000000000000000BEEF";
+    const deadRefs = `${rt.tmpHome}/.scraper/refs.${deadId}.json`;
+    await Deno.writeTextFile(deadRefs, '{"snapshotId":"s0","refs":{}}');
+
+    const result = await runScraper(["tabs"], rt.env);
+    assertEquals(result.code, 0, `tabs failed: ${result.stderr}`);
+
+    // Live tab's refs file must still exist; dead tab's must be gone.
+    await Deno.stat(liveRefs);
+    try {
+      await Deno.stat(deadRefs);
+      throw new Error(`${deadRefs} should have been cleaned up`);
+    } catch (e) {
+      assert(e instanceof Deno.errors.NotFound, `${deadRefs} should not exist after tabs`);
+    }
+  } finally {
+    await fixtures.close();
+    await stopTestRuntime(rt);
+  }
+});
+
+Deno.test("CLI: tabs is a no-op (exit 0) when ~/.scraper does not exist yet", async () => {
+  const rt = await startTestRuntime();
+  try {
+    // Fresh HOME — the scraper state dir has not been created.
+    try {
+      await Deno.stat(`${rt.tmpHome}/.scraper`);
+      throw new Error("state dir should not exist yet");
+    } catch (e) {
+      assert(e instanceof Deno.errors.NotFound);
+    }
+    const result = await runScraper(["tabs"], rt.env);
+    assertEquals(result.code, 0, `tabs failed: ${result.stderr}`);
+  } finally {
+    await stopTestRuntime(rt);
+  }
+});

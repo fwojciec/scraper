@@ -1,12 +1,13 @@
 // Composition root: wires adapters -> app -> cli.
 
 import { dirname } from "@std/path";
-import { type CliDeps, runCli } from "./cli/mod.ts";
+import { type CliDeps, runCli, type TabInfo } from "./cli/mod.ts";
 import {
   buildBrowserWsUrl,
   canonicalizeTargetId,
   createPageConnection,
   defaultUserDataDir,
+  listHttpTabs,
   matchTabByPrefix,
   readDevToolsActivePort,
   resolveTarget,
@@ -134,9 +135,42 @@ async function canonicalizeTab(input: string): Promise<string> {
   return await canonicalizeTargetId(input, port);
 }
 
+async function listTabs(): Promise<TabInfo[]> {
+  const { port } = await readDevToolsActivePort(userDataDir);
+  const tabs = await listHttpTabs(port);
+  return tabs
+    .filter((t) => t.type === "page")
+    .map(({ id, url, title }) => ({ id, url, title }));
+}
+
+// Matches `refs.<targetId>.json` — capture group is the targetId.
+// Deliberately permissive on the id so we can clean up any prior writer's
+// format (uppercase hex is what Chrome currently emits).
+const REFS_FILE_RE = /^refs\.([^.]+)\.json$/;
+
+async function cleanupDeadRefs(liveIds: readonly string[]): Promise<void> {
+  const live = new Set(liveIds);
+  let entries: AsyncIterable<Deno.DirEntry>;
+  try {
+    entries = Deno.readDir(STATE_DIR);
+  } catch (e) {
+    if (e instanceof Deno.errors.NotFound) return;
+    throw e;
+  }
+  for await (const entry of entries) {
+    if (!entry.isFile) continue;
+    const m = entry.name.match(REFS_FILE_RE);
+    if (!m) continue;
+    if (live.has(m[1])) continue;
+    await removeIfExists(`${STATE_DIR}/${entry.name}`);
+  }
+}
+
 const deps: CliDeps = {
   app,
   canonicalizeTab,
+  listTabs,
+  cleanupDeadRefs,
   stdout: (s) => Deno.stdout.writeSync(encoder.encode(s)),
   stderr: (s) => Deno.stderr.writeSync(encoder.encode(s)),
 };

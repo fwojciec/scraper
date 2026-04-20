@@ -1,5 +1,5 @@
 import { assertEquals, assertStringIncludes } from "@std/assert";
-import { type CliDeps, runCli } from "./mod.ts";
+import { type CliDeps, runCli, type TabInfo } from "./mod.ts";
 import type { ScraperApp } from "../domain/mod.ts";
 
 const FULL_TAB = "4AE7B2C9E1D4F0A2B8C6E1F3A5D9B7C2";
@@ -42,6 +42,8 @@ function stubDeps(
   overrides: {
     app?: Partial<ScraperApp>;
     canonicalizeTab?: (input: string) => Promise<string>;
+    listTabs?: () => Promise<TabInfo[]>;
+    cleanupDeadRefs?: (liveIds: readonly string[]) => Promise<void>;
     stdout?: (s: string) => void;
     stderr?: (s: string) => void;
   } = {},
@@ -49,6 +51,8 @@ function stubDeps(
   return {
     app: stubApp(overrides.app),
     canonicalizeTab: stubCanonicalize(overrides.canonicalizeTab),
+    listTabs: overrides.listTabs ?? (() => Promise.resolve([])),
+    cleanupDeadRefs: overrides.cleanupDeadRefs ?? (() => Promise.resolve()),
     stdout: overrides.stdout ?? (() => {}),
     stderr: overrides.stderr ?? (() => {}),
   };
@@ -709,4 +713,120 @@ Deno.test("upload reports error from dep", async () => {
   );
   assertEquals(code, 1);
   assertStringIncludes(io.err, "element is not a file input");
+});
+
+// --- tabs ---
+
+const TAB_A = "4AE7B2C9E1D4F0A2B8C6E1F3A5D9B7C2";
+const TAB_B = "9F3BA1C2D7E4F1A8B5C3E9F6A4D2B0C5";
+
+Deno.test("tabs lists full targetId, URL, and title for every live page tab", async () => {
+  const io = capture();
+  const code = await runCli(
+    ["tabs"],
+    stubDeps({
+      listTabs: () =>
+        Promise.resolve([
+          { id: TAB_A, url: "https://example.com/form", title: "Direct Medical Reimbursement" },
+          { id: TAB_B, url: "https://mail.google.com/", title: "Inbox" },
+        ]),
+      stdout: io.stdout,
+    }),
+  );
+  assertEquals(code, 0);
+  // Each tab's full id, url, and title appear on a single line.
+  assertStringIncludes(io.out, TAB_A);
+  assertStringIncludes(io.out, "https://example.com/form");
+  assertStringIncludes(io.out, "Direct Medical Reimbursement");
+  assertStringIncludes(io.out, TAB_B);
+  assertStringIncludes(io.out, "https://mail.google.com/");
+  assertStringIncludes(io.out, "Inbox");
+  const lines = io.out.split("\n").filter((l) => l.length > 0);
+  assertEquals(lines.length, 2, `expected 2 output lines, got: ${JSON.stringify(io.out)}`);
+  // The full id must appear first on each line so agents can prefix-parse by whitespace.
+  assertEquals(lines[0].startsWith(TAB_A), true, `line 0 should start with full id: ${lines[0]}`);
+  assertEquals(lines[1].startsWith(TAB_B), true, `line 1 should start with full id: ${lines[1]}`);
+});
+
+Deno.test("tabs passes live targetIds to cleanupDeadRefs", async () => {
+  let received: readonly string[] | undefined;
+  const code = await runCli(
+    ["tabs"],
+    stubDeps({
+      listTabs: () =>
+        Promise.resolve([
+          { id: TAB_A, url: "https://a", title: "A" },
+          { id: TAB_B, url: "https://b", title: "B" },
+        ]),
+      cleanupDeadRefs: (ids) => {
+        received = ids;
+        return Promise.resolve();
+      },
+    }),
+  );
+  assertEquals(code, 0);
+  assertEquals([...(received ?? [])].sort(), [TAB_A, TAB_B].sort());
+});
+
+Deno.test("tabs with no live tabs still runs cleanup (to clear orphaned refs)", async () => {
+  let called = false;
+  const io = capture();
+  const code = await runCli(
+    ["tabs"],
+    stubDeps({
+      listTabs: () => Promise.resolve([]),
+      cleanupDeadRefs: (ids) => {
+        called = true;
+        assertEquals([...ids], []);
+        return Promise.resolve();
+      },
+      stdout: io.stdout,
+    }),
+  );
+  assertEquals(code, 0);
+  assertEquals(called, true);
+  assertEquals(io.out, "");
+});
+
+Deno.test("tabs reports an error from listTabs and exits non-zero", async () => {
+  const io = capture();
+  let cleanupCalled = false;
+  const code = await runCli(
+    ["tabs"],
+    stubDeps({
+      listTabs: () => Promise.reject(new Error("chrome is not running")),
+      cleanupDeadRefs: () => {
+        cleanupCalled = true;
+        return Promise.resolve();
+      },
+      stderr: io.stderr,
+    }),
+  );
+  assertEquals(code, 1);
+  assertStringIncludes(io.err, "chrome is not running");
+  // Cleanup depends on the live-tab set; if we can't list tabs, cleanup must not run
+  // (otherwise it would delete every refs.<id>.json file).
+  assertEquals(cleanupCalled, false);
+});
+
+Deno.test("tabs does not require --tab and does not call canonicalizeTab", async () => {
+  let canonicalized = false;
+  const code = await runCli(
+    ["tabs"],
+    stubDeps({
+      listTabs: () => Promise.resolve([]),
+      canonicalizeTab: () => {
+        canonicalized = true;
+        return Promise.resolve("x");
+      },
+    }),
+  );
+  assertEquals(code, 0);
+  assertEquals(canonicalized, false);
+});
+
+Deno.test("usage advertises the tabs command", async () => {
+  const io = capture();
+  await runCli([], stubDeps({ stderr: io.stderr }));
+  assertStringIncludes(io.err, "tabs");
 });
