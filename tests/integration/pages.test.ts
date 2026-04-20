@@ -61,8 +61,12 @@ Deno.test("counter-refs advances monotonically across snapshots", async () => {
     const refsText = await Deno.readTextFile(
       `${rt.tmpHome}/.scraper/refs.${rt.targetId}.json`,
     );
-    const refs = JSON.parse(refsText) as Record<string, number>;
-    const refNumbers = Object.keys(refs).map((r) => Number(r.slice(1)));
+    const refsFile = JSON.parse(refsText) as {
+      snapshotId: string;
+      refs: Record<string, number>;
+    };
+    assert(refsFile.snapshotId.startsWith("s"), "refs file should include snapshotId");
+    const refNumbers = Object.keys(refsFile.refs).map((r) => Number(r.slice(1)));
     assert(
       refNumbers.every((n) => n > afterFirst),
       `post-second-snapshot refs should be > first counter (${afterFirst}), got ${refNumbers}`,

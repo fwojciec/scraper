@@ -20,17 +20,27 @@ import type {
 /** Per-tab refs persistence (`refs.<targetId>.json`). */
 export interface RefsStore {
   read(targetId: string): Promise<RefMap | null>;
-  write(targetId: string, refs: RefMap): Promise<void>;
+  /** Persist refs alongside the snapshotId that minted them. */
+  write(targetId: string, refs: RefMap, snapshotId: string): Promise<void>;
   remove(targetId: string): Promise<void>;
 }
 
 /**
- * Session-scoped monotonic counter store (`counter-refs`). Reads return 0 when
- * the file does not yet exist so callers can treat the first snapshot uniformly.
+ * Session-scoped monotonic counter store. Reads return 0 when the file does not
+ * yet exist so callers can treat the first snapshot uniformly. Used for both
+ * the ref counter (`counter-refs`) and the artifact counter (`counter`).
  */
 export interface CounterStore {
   read(): Promise<number>;
   write(value: number): Promise<void>;
+}
+
+/** Persists snapshot YAML and screenshot PNG artifacts to `~/.scraper/`. */
+export interface ArtifactStore {
+  /** Write `~/.scraper/<snapshotId>.yaml`; returns the full path. */
+  writeSnapshot(snapshotId: string, yaml: string): Promise<string>;
+  /** Write `~/.scraper/<screenshotId>.png`; returns the full path. */
+  writeScreenshot(screenshotId: string, png: Uint8Array): Promise<string>;
 }
 
 /** Dependencies for the scraper application layer. */
@@ -52,6 +62,8 @@ export interface ScraperAppDeps {
   // State persistence
   refsStore: RefsStore;
   refCounterStore: CounterStore;
+  artifactCounterStore: CounterStore;
+  artifactStore: ArtifactStore;
 
   // Warning output
   warn(msg: string): void;
@@ -102,7 +114,15 @@ export function createScraperApp(deps: ScraperAppDeps): ScraperApp {
     });
   }
 
-  /** Run snapshot pipeline and persist refs + monotonic counter. */
+  /** Reserve the next artifact id (monotonic across snapshots and screenshots). */
+  async function nextArtifactCounter(): Promise<number> {
+    const current = await deps.artifactCounterStore.read();
+    const next = current + 1;
+    await deps.artifactCounterStore.write(next);
+    return next;
+  }
+
+  /** Run snapshot pipeline and persist refs + monotonic counters + YAML file. */
   async function doSnapshot(
     page: CdpPageService,
     targetId: string,
@@ -110,9 +130,17 @@ export function createScraperApp(deps: ScraperAppDeps): ScraperApp {
   ) {
     const snapshotSvc = snapshotServiceFor(page);
     const startingRefCounter = await deps.refCounterStore.read();
+    const artifactN = await nextArtifactCounter();
+    const snapshotId = `s${artifactN}`;
+    const { url, title } = await page.getPageInfo();
     const result = await snapshotSvc.snapshot({
       ...(opts ?? {}),
       startingRefCounter,
+      snapshotId,
+      targetId,
+      url,
+      title,
+      dialog: null,
     });
     if (result.lastRefCounter !== startingRefCounter) {
       await deps.refCounterStore.write(result.lastRefCounter);
@@ -121,10 +149,11 @@ export function createScraperApp(deps: ScraperAppDeps): ScraperApp {
     // by that tab's next snapshot. A snapshot that mints no refs must still
     // clear any prior refs for this tab so stale handles cannot resolve.
     if (Object.keys(result.refs).length > 0) {
-      await deps.refsStore.write(targetId, result.refs);
+      await deps.refsStore.write(targetId, result.refs, snapshotId);
     } else {
       await deps.refsStore.remove(targetId);
     }
+    await deps.artifactStore.writeSnapshot(snapshotId, result.yaml);
     return result;
   }
 
@@ -208,7 +237,11 @@ export function createScraperApp(deps: ScraperAppDeps): ScraperApp {
       return withPageConnection(targetId, (page) => page.evaluate(expression));
     },
     screenshot(targetId: string, fullPage?: boolean) {
-      return withPageConnection(targetId, (page) => page.screenshot(fullPage));
+      return withPageConnection(targetId, async (page) => {
+        const png = await page.screenshot(fullPage);
+        const artifactN = await nextArtifactCounter();
+        return await deps.artifactStore.writeScreenshot(`shot${artifactN}`, png);
+      });
     },
     upload(targetId: string, target: ElementTarget, filePath: string, opts?: ActionOptions) {
       return withPageConnection(targetId, async (page) => {

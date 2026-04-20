@@ -1,4 +1,4 @@
-import { assert, assertEquals, assertGreater, assertRejects } from "@std/assert";
+import { assertEquals, assertGreater, assertRejects } from "@std/assert";
 import {
   type CdpPageService,
   createPageConnection,
@@ -89,15 +89,17 @@ Deno.test("evaluate returns complex objects by value", async () => {
   }
 });
 
-Deno.test("screenshot returns a valid png file path", async () => {
+Deno.test("screenshot returns a valid png byte stream", async () => {
   const browser = await setup();
   try {
     await browser.navigate("data:text/html,<h1>screenshot</h1>");
-    const path = await browser.screenshot();
-    assert(path.endsWith(".png"));
-    const stat = await Deno.stat(path);
-    assertGreater(stat.size, 0);
-    await Deno.remove(path);
+    const png = await browser.screenshot();
+    assertGreater(png.length, 0);
+    // PNG magic bytes
+    assertEquals(png[0], 0x89);
+    assertEquals(png[1], 0x50);
+    assertEquals(png[2], 0x4e);
+    assertEquals(png[3], 0x47);
   } finally {
     await teardown(browser);
   }

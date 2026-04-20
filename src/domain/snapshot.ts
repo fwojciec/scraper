@@ -3,6 +3,14 @@ export interface SnapshotOptions {
   maxDepth?: number;
   maxNodes?: number;
   selector?: string;
+}
+
+/**
+ * Full request sent to the SnapshotService. Extends SnapshotOptions with the
+ * session-scoped ref counter and the header fields required by the on-disk
+ * snapshot artifact (see Tier B design §Snapshot Artifact).
+ */
+export interface SnapshotRequest extends SnapshotOptions {
   /**
    * Session-scoped starting value for the ref counter. The first ref minted by
    * this snapshot is `e{startingRefCounter + 1}`. Defaults to 0, so the first
@@ -10,6 +18,19 @@ export interface SnapshotOptions {
    * (`~/.scraper/counter-refs`).
    */
   startingRefCounter?: number;
+  /** Artifact ID for this snapshot (e.g. `s47`). Rendered into the YAML header. */
+  snapshotId: string;
+  /** Canonical full targetId of the tab this snapshot came from. */
+  targetId: string;
+  /** Page URL at capture time. */
+  url: string;
+  /** Page title at capture time. */
+  title: string;
+  /**
+   * Dialog observed during the command that produced this snapshot, or null
+   * when no dialog fired. Always null until #50 wires event capture.
+   */
+  dialog: string | null;
 }
 
 /** Opaque token for a ref label in an ARIA snapshot (e.g. "e1", "e2"). */

@@ -1,6 +1,10 @@
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
+import { parse as parseYaml } from "@std/yaml";
 import { type AccessibilityNode } from "./tree.ts";
 import { createSnapshotService, type SnapshotDeps } from "./snapshot.ts";
+import type { SnapshotRequest } from "../domain/snapshot.ts";
+
+const FULL_TAB = "4AE7B2C9E1D4F0A2B8C6E1F3A5D9B7C2";
 
 function ax(overrides: Partial<AccessibilityNode> & { nodeId: string }): AccessibilityNode {
   return { ignored: false, ...overrides };
@@ -10,6 +14,17 @@ function mockDeps(axNodes: AccessibilityNode[], overrides?: Partial<SnapshotDeps
   return {
     getFullAXTree: () => Promise.resolve(axNodes),
     resolveSelector: () => Promise.reject(new Error("resolveSelector not mocked")),
+    ...overrides,
+  };
+}
+
+function req(overrides: Partial<SnapshotRequest> = {}): SnapshotRequest {
+  return {
+    snapshotId: "s1",
+    targetId: FULL_TAB,
+    url: "https://example.com/",
+    title: "Example",
+    dialog: null,
     ...overrides,
   };
 }
@@ -30,7 +45,7 @@ Deno.test("snapshot returns YAML from AccessibilityNodes", async () => {
     }),
   ];
   const svc = createSnapshotService(mockDeps(axNodes));
-  const result = await svc.snapshot({});
+  const result = await svc.snapshot(req());
   assertStringIncludes(result.yaml, "navigation:");
   assertStringIncludes(result.yaml, `link "Home"`);
 });
@@ -46,19 +61,20 @@ Deno.test("snapshot returns refs", async () => {
     }),
   ];
   const svc = createSnapshotService(mockDeps(axNodes));
-  const result = await svc.snapshot({});
+  const result = await svc.snapshot(req());
   assertEquals(result.refs, { e1: 42 });
 });
 
-Deno.test("snapshot returns empty YAML for empty tree", async () => {
+Deno.test("snapshot: empty tree renders header plus `tree: []`", async () => {
   const axNodes: AccessibilityNode[] = [
     ax({ nodeId: "1", ignored: true, role: { type: "role", value: "RootWebArea" } }),
   ];
   const svc = createSnapshotService(mockDeps(axNodes));
-  const result = await svc.snapshot({});
-  assertEquals(result.yaml, "");
+  const result = await svc.snapshot(req({ snapshotId: "s7" }));
   assertEquals(result.refs, {});
   assertEquals(result.lastRefCounter, 0);
+  assertStringIncludes(result.yaml, "snapshot: s7");
+  assertStringIncludes(result.yaml, "tree: []");
 });
 
 Deno.test("snapshot: starts ref minting at startingRefCounter + 1", async () => {
@@ -78,7 +94,7 @@ Deno.test("snapshot: starts ref minting at startingRefCounter + 1", async () => 
     }),
   ];
   const svc = createSnapshotService(mockDeps(axNodes));
-  const result = await svc.snapshot({ startingRefCounter: 14 });
+  const result = await svc.snapshot(req({ startingRefCounter: 14 }));
   assertEquals(result.refs, { e15: 10, e16: 20 });
   assertEquals(result.lastRefCounter, 16);
   assertStringIncludes(result.yaml, "[ref=e15]");
@@ -89,7 +105,7 @@ Deno.test("snapshot: lastRefCounter equals startingRefCounter when nothing is mi
   const svc = createSnapshotService(mockDeps([], {
     resolveSelector: () => Promise.resolve(999),
   }));
-  const result = await svc.snapshot({ selector: "#nope", startingRefCounter: 42 });
+  const result = await svc.snapshot(req({ selector: "#nope", startingRefCounter: 42 }));
   assertEquals(result.lastRefCounter, 42);
   assertEquals(result.refs, {});
 });
@@ -120,7 +136,7 @@ Deno.test("snapshot uses selector to scope subtree", async () => {
       return Promise.resolve(99); // backendDOMNodeId of the main element
     },
   }));
-  const result = await svc.snapshot({ selector: "#main" });
+  const result = await svc.snapshot(req({ selector: "#main" }));
   assert(!result.yaml.includes("Skip"));
   assertStringIncludes(result.yaml, `paragraph "Include"`);
 });
@@ -139,7 +155,7 @@ Deno.test("snapshot respects maxDepth", async () => {
     }),
   ];
   const svc = createSnapshotService(mockDeps(axNodes));
-  const result = await svc.snapshot({ maxDepth: 2 });
+  const result = await svc.snapshot(req({ maxDepth: 2 }));
   assertStringIncludes(result.yaml, "navigation");
   assert(!result.yaml.includes("link"));
 });
@@ -167,13 +183,13 @@ Deno.test("snapshot respects maxNodes", async () => {
     }),
   ];
   const svc = createSnapshotService(mockDeps(axNodes));
-  const result = await svc.snapshot({ maxNodes: 2 });
+  const result = await svc.snapshot(req({ maxNodes: 2 }));
   const lines = result.yaml.split("\n").filter((l: string) => l.trim().startsWith("- "));
   assert(lines.length > 0, "expected some output");
   assert(lines.length <= 2, "expected at most 2 nodes");
 });
 
-Deno.test("snapshot returns empty for unmatched selector", async () => {
+Deno.test("snapshot returns empty tree for unmatched selector", async () => {
   const axNodes: AccessibilityNode[] = [
     ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
     ax({
@@ -185,7 +201,65 @@ Deno.test("snapshot returns empty for unmatched selector", async () => {
   const svc = createSnapshotService(mockDeps(axNodes, {
     resolveSelector: () => Promise.resolve(999), // backendDOMNodeId that doesn't exist
   }));
-  const result = await svc.snapshot({ selector: "#nope" });
-  assertEquals(result.yaml, "");
+  const result = await svc.snapshot(req({ selector: "#nope" }));
+  assertStringIncludes(result.yaml, "tree: []");
   assertEquals(result.refs, {});
+});
+
+// --- Header rendering ---
+
+Deno.test("snapshot YAML has all six header fields and parses", async () => {
+  const axNodes: AccessibilityNode[] = [
+    ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
+    ax({
+      nodeId: "2",
+      role: { type: "role", value: "button" },
+      name: { type: "contents", value: "Click" },
+      backendDOMNodeId: 42,
+    }),
+  ];
+  const svc = createSnapshotService(mockDeps(axNodes));
+  const result = await svc.snapshot(req({
+    snapshotId: "s47",
+    targetId: FULL_TAB,
+    url: "https://memberforms.uhc.com/DirectMedicalReimbursement.html",
+    title: "Direct Medical Reimbursement",
+    dialog: null,
+  }));
+
+  const parsed = parseYaml(result.yaml) as Record<string, unknown>;
+  assertEquals(parsed.snapshot, "s47");
+  assertEquals(parsed.targetId, FULL_TAB);
+  assertEquals(parsed.url, "https://memberforms.uhc.com/DirectMedicalReimbursement.html");
+  assertEquals(parsed.title, "Direct Medical Reimbursement");
+  assertEquals(parsed.dialog, null);
+  assert(Array.isArray(parsed.tree), "tree should be a sequence");
+});
+
+Deno.test("snapshot YAML quotes url and title with special characters", async () => {
+  const svc = createSnapshotService(mockDeps([]));
+  const result = await svc.snapshot(req({
+    url: 'https://x.com/?q="hi"',
+    title: 'Report: "Q3"',
+  }));
+  const parsed = parseYaml(result.yaml) as Record<string, unknown>;
+  assertEquals(parsed.url, 'https://x.com/?q="hi"');
+  assertEquals(parsed.title, 'Report: "Q3"');
+});
+
+Deno.test("snapshot YAML surfaces dialog text when provided", async () => {
+  const svc = createSnapshotService(mockDeps([]));
+  const result = await svc.snapshot(req({
+    dialog: "Unsaved changes — leave?",
+  }));
+  const parsed = parseYaml(result.yaml) as Record<string, unknown>;
+  assertEquals(parsed.dialog, "Unsaved changes — leave?");
+});
+
+Deno.test("snapshot YAML renders targetId as canonical 32-hex string", async () => {
+  const svc = createSnapshotService(mockDeps([]));
+  const result = await svc.snapshot(req({ targetId: FULL_TAB }));
+  // Must not be an abbreviated prefix; the full id should appear verbatim.
+  assertStringIncludes(result.yaml, `targetId: ${FULL_TAB}`);
+  assertEquals(FULL_TAB.length, 32);
 });

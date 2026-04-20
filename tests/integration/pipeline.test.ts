@@ -77,7 +77,13 @@ Deno.test("snapshot: bestseller table has expected ARIA structure", async () => 
   const ctx = await setup();
   try {
     await ctx.browser.navigate(ctx.fixtures.url("bestseller-table.html"));
-    const result = await ctx.snapshots.snapshot({});
+    const result = await ctx.snapshots.snapshot({
+      snapshotId: "s1",
+      targetId: "integration-test",
+      url: "",
+      title: "",
+      dialog: null,
+    });
 
     // Verify heading
     assert(result.yaml.includes("heading"), "should contain heading role");
@@ -113,7 +119,13 @@ Deno.test("snapshot: JS-rendered page has dynamically created content", async ()
   const ctx = await setup();
   try {
     await ctx.browser.navigate(ctx.fixtures.url("js-rendered.html"));
-    const result = await ctx.snapshots.snapshot({});
+    const result = await ctx.snapshots.snapshot({
+      snapshotId: "s1",
+      targetId: "integration-test",
+      url: "",
+      title: "",
+      dialog: null,
+    });
 
     // Verify JS-rendered DOM structure (article + heading roles prove script executed)
     assert(result.yaml.includes("- article"), "should contain article roles from JS-rendered DOM");
@@ -186,7 +198,13 @@ Deno.test("snapshot: refs map to valid backendDOMNodeIds", async () => {
   const ctx = await setup();
   try {
     await ctx.browser.navigate(ctx.fixtures.url("bestseller-table.html"));
-    const result = await ctx.snapshots.snapshot({});
+    const result = await ctx.snapshots.snapshot({
+      snapshotId: "s1",
+      targetId: "integration-test",
+      url: "",
+      title: "",
+      dialog: null,
+    });
 
     // Refs should be populated with positive integers
     const refEntries = Object.entries(result.refs);

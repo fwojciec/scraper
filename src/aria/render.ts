@@ -42,8 +42,9 @@ function renderNode(node: AriaNode, indent: number): string {
   return [header, ...childLines].join("\n");
 }
 
-/** Render an AriaNode tree to YAML string. */
-export function renderYaml(nodes: AriaNode[]): string {
+/** Render an AriaNode tree to YAML string, optionally starting at a base indent. */
+export function renderYaml(nodes: AriaNode[], opts?: { baseIndent?: number }): string {
   if (nodes.length === 0) return "";
-  return nodes.map((n) => renderNode(n, 0)).join("\n") + "\n";
+  const indent = opts?.baseIndent ?? 0;
+  return nodes.map((n) => renderNode(n, indent)).join("\n") + "\n";
 }

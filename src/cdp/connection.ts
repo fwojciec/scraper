@@ -13,7 +13,10 @@ import { createWaitMethods } from "./wait.ts";
 export interface CdpPageService {
   navigate(url: string): Promise<void>;
   evaluate(expression: string): Promise<EvalResult>;
-  screenshot(fullPage?: boolean): Promise<string>;
+  /** Capture a PNG screenshot. Returns raw bytes so callers control naming. */
+  screenshot(fullPage?: boolean): Promise<Uint8Array>;
+  /** Current URL and title of the attached page, read via `Target.getTargetInfo`. */
+  getPageInfo(): Promise<{ url: string; title: string }>;
   close(): void;
   getFullAXTree(): Promise<AccessibilityNode[]>;
   resolveSelector(selector: string): Promise<number>;
@@ -178,7 +181,7 @@ export async function createPageConnection(
     return { result: response.result.value };
   }
 
-  async function screenshot(fullPage?: boolean): Promise<string> {
+  async function screenshot(fullPage?: boolean): Promise<Uint8Array> {
     let clip:
       | { x: number; y: number; width: number; height: number; scale: number }
       | undefined;
@@ -198,9 +201,15 @@ export async function createPageConnection(
       sessionId,
     );
 
-    const path = await Deno.makeTempFile({ suffix: ".png" });
-    await Deno.writeFile(path, Uint8Array.from(atob(data), (c) => c.charCodeAt(0)));
-    return path;
+    return Uint8Array.from(atob(data), (c) => c.charCodeAt(0));
+  }
+
+  async function getPageInfo(): Promise<{ url: string; title: string }> {
+    const { targetInfo } = await cdp.Target.getTargetInfo({ targetId });
+    return {
+      url: typeof targetInfo?.url === "string" ? targetInfo.url : "",
+      title: typeof targetInfo?.title === "string" ? targetInfo.title : "",
+    };
   }
 
   async function getFullAXTree(): Promise<AccessibilityNode[]> {
@@ -310,6 +319,7 @@ export async function createPageConnection(
     navigate,
     evaluate,
     screenshot,
+    getPageInfo,
     getFullAXTree,
     resolveSelector,
     resolveRef,

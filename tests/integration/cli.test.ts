@@ -1,6 +1,7 @@
 /** CLI E2E smoke test: exercises the full public surface through main.ts. */
 
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
+import { parse as parseYaml } from "@std/yaml";
 import { startFixtureServer } from "./fixture-server.ts";
 import { runScraper, startTestRuntime, stopTestRuntime } from "./runtime.ts";
 
@@ -140,6 +141,61 @@ Deno.test("CLI: missing --tab reports its error even when Chrome is unreachable"
   } finally {
     await Deno.remove(emptyDir, { recursive: true });
     await Deno.remove(tmpHome, { recursive: true });
+  }
+});
+
+Deno.test("CLI: back-to-back snapshots produce s1.yaml then s2.yaml with parseable headers", async () => {
+  const rt = await startTestRuntime();
+  const fixtures = startFixtureServer();
+  try {
+    await runScraper(
+      ["navigate", "--tab", rt.targetId, fixtures.url("bestseller-table.html")],
+      rt.env,
+    );
+    const first = await runScraper(["snapshot", "--tab", rt.targetId], rt.env);
+    assertEquals(first.code, 0, `first snapshot failed: ${first.stderr}`);
+    const second = await runScraper(["snapshot", "--tab", rt.targetId], rt.env);
+    assertEquals(second.code, 0, `second snapshot failed: ${second.stderr}`);
+
+    const s1 = await Deno.readTextFile(`${rt.tmpHome}/.scraper/s1.yaml`);
+    const s2 = await Deno.readTextFile(`${rt.tmpHome}/.scraper/s2.yaml`);
+
+    const parsed1 = parseYaml(s1) as Record<string, unknown>;
+    assertEquals(parsed1.snapshot, "s1");
+    assertEquals(parsed1.targetId, rt.targetId);
+    assertEquals(typeof parsed1.url, "string");
+    assertEquals(typeof parsed1.title, "string");
+    assertEquals(parsed1.dialog, null);
+    assert(Array.isArray(parsed1.tree), "tree should be a sequence");
+
+    const parsed2 = parseYaml(s2) as Record<string, unknown>;
+    assertEquals(parsed2.snapshot, "s2");
+  } finally {
+    await fixtures.close();
+    await stopTestRuntime(rt);
+  }
+});
+
+Deno.test("CLI: screenshot writes shot{N}.png into ~/.scraper using the shared artifact counter", async () => {
+  const rt = await startTestRuntime();
+  const fixtures = startFixtureServer();
+  try {
+    await runScraper(
+      ["navigate", "--tab", rt.targetId, fixtures.url("bestseller-table.html")],
+      rt.env,
+    );
+    const snap = await runScraper(["snapshot", "--tab", rt.targetId], rt.env);
+    assertEquals(snap.code, 0);
+    const shot = await runScraper(["screenshot", "--tab", rt.targetId], rt.env);
+    assertEquals(shot.code, 0, `screenshot failed: ${shot.stderr}`);
+    const shotPath = shot.stdout.trim();
+    // Shared counter: first snapshot consumed s1; this screenshot consumes shot2.
+    assertEquals(shotPath, `${rt.tmpHome}/.scraper/shot2.png`);
+    const stat = await Deno.stat(shotPath);
+    assert(stat.size > 0, "screenshot file should not be empty");
+  } finally {
+    await fixtures.close();
+    await stopTestRuntime(rt);
   }
 });
 
