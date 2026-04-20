@@ -1,7 +1,6 @@
 /** Integration tests: full pipeline with real Chrome, CDP, ARIA snapshots, and local fixtures. */
 
 import { assert, assertEquals } from "@std/assert";
-import { type ChromeProcess, killChrome, launchChrome } from "../../src/cdp/chrome.ts";
 import {
   type CdpPageService,
   createPageConnection,
@@ -10,10 +9,11 @@ import {
 import { createSnapshotService } from "../../src/aria/mod.ts";
 import type { SnapshotService } from "../../src/domain/browser.ts";
 import { type FixtureServer, startFixtureServer } from "./fixture-server.ts";
+import { killTestChrome, launchTestChrome, type TestChrome } from "./test-chrome.ts";
 
 interface TestContext {
   fixtures: FixtureServer;
-  chrome: ChromeProcess;
+  chrome: TestChrome;
   browser: CdpPageService;
   snapshots: SnapshotService;
 }
@@ -40,7 +40,7 @@ async function setup(): Promise<TestContext> {
   const partial: Partial<TestContext> = {};
   try {
     partial.fixtures = startFixtureServer();
-    partial.chrome = await launchChrome();
+    partial.chrome = await launchTestChrome();
     const targetId = await discoverPageTarget(partial.chrome.port);
     const wsUrl = await discoverWsUrl(partial.chrome.port);
     partial.browser = await createPageConnection(wsUrl, targetId);
@@ -64,7 +64,7 @@ async function teardown(ctx: Partial<TestContext>) {
     ctx.browser?.close();
   } catch { /* already closed */ }
   try {
-    if (ctx.chrome) await killChrome(ctx.chrome);
+    if (ctx.chrome) await killTestChrome(ctx.chrome);
   } catch { /* already dead */ }
   try {
     await ctx.fixtures?.close();

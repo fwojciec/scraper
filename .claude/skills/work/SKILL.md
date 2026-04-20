@@ -59,9 +59,9 @@ deno task ci
 git add .
 ```
 
-Invoke the `codex-review` skill (Skill tool, skill=`codex-review`). It blocks, runs a Codex
-review of the working tree, and prints findings verbatim. Each review is a paid Codex call —
-**never re-run on an unchanged tree** and cap at **2 paid reviews per issue**.
+Invoke the `codex-review` skill (Skill tool, skill=`codex-review`). It blocks, runs a Codex review
+of the working tree, and prints findings verbatim. Each review is a paid Codex call — **never re-run
+on an unchanged tree** and cap at **2 paid reviews per issue**.
 
 ### Act on findings
 
@@ -76,8 +76,8 @@ review of the working tree, and prints findings verbatim. Each review is a paid 
 ### Stuck?
 
 If implementation blocks on a non-trivial bug or design question, delegate to the
-`codex:codex-rescue` subagent (Agent tool, subagent_type=`codex:codex-rescue`) rather than
-spinning. Rescue is not a replacement for review — use it only when actually blocked.
+`codex:codex-rescue` subagent (Agent tool, subagent_type=`codex:codex-rescue`) rather than spinning.
+Rescue is not a replacement for review — use it only when actually blocked.
 
 ---
 

@@ -4,8 +4,6 @@ import type { ScraperApp } from "../domain/mod.ts";
 
 function stubApp(overrides: Partial<ScraperApp> = {}): ScraperApp {
   return {
-    start: () => Promise.resolve({ status: "started" as const, chromePid: 456, cdpPort: 9222 }),
-    stop: () => Promise.resolve(),
     navigate: () => Promise.resolve({}),
     snapshot: () => Promise.resolve({ yaml: "- heading", refs: {} }),
     evaluate: () => Promise.resolve({ result: null }),
@@ -72,97 +70,6 @@ Deno.test("unknown command prints error and returns 1", async () => {
   assertEquals(code, 1);
   assertStringIncludes(io.err, "unknown command");
   assertStringIncludes(io.err, "bogus");
-});
-
-// --- start ---
-
-Deno.test("start prints started message with pid and port", async () => {
-  const io = capture();
-  const code = await runCli(
-    ["start"],
-    stubDeps({
-      app: {
-        start: () => Promise.resolve({ status: "started" as const, chromePid: 456, cdpPort: 9222 }),
-      },
-      stdout: io.stdout,
-    }),
-  );
-  assertEquals(code, 0);
-  assertStringIncludes(io.out, "chrome started");
-  assertStringIncludes(io.out, "456");
-  assertStringIncludes(io.out, "9222");
-});
-
-Deno.test("start with already running prints info", async () => {
-  const io = capture();
-  const code = await runCli(
-    ["start"],
-    stubDeps({
-      app: {
-        start: () =>
-          Promise.resolve({ status: "already_running" as const, chromePid: 123, cdpPort: 9222 }),
-      },
-      stdout: io.stdout,
-    }),
-  );
-  assertEquals(code, 0);
-  assertStringIncludes(io.out, "already running");
-  assertStringIncludes(io.out, "123");
-});
-
-Deno.test("start passes --chrome-path option", async () => {
-  let receivedPath: string | undefined;
-  const code = await runCli(
-    ["start", "--chrome-path", "/usr/bin/chromium"],
-    stubDeps({
-      app: {
-        start: (opts) => {
-          receivedPath = opts.chromePath;
-          return Promise.resolve({ status: "started" as const, chromePid: 456, cdpPort: 9222 });
-        },
-      },
-    }),
-  );
-  assertEquals(code, 0);
-  assertEquals(receivedPath, "/usr/bin/chromium");
-});
-
-Deno.test("start reports failure", async () => {
-  const io = capture();
-  const code = await runCli(
-    ["start"],
-    stubDeps({
-      app: { start: () => Promise.reject(new Error("Chrome not found")) },
-      stderr: io.stderr,
-    }),
-  );
-  assertEquals(code, 1);
-  assertStringIncludes(io.err, "Chrome not found");
-});
-
-// --- stop ---
-
-Deno.test("stop prints chrome stopped", async () => {
-  const io = capture();
-  const code = await runCli(
-    ["stop"],
-    stubDeps({ stdout: io.stdout }),
-  );
-  assertEquals(code, 0);
-  assertStringIncludes(io.out, "chrome stopped");
-});
-
-Deno.test("stop reports error", async () => {
-  const io = capture();
-  const code = await runCli(
-    ["stop"],
-    stubDeps({
-      app: { stop: () => Promise.reject(new Error("chrome is not running")) },
-      stderr: io.stderr,
-    }),
-  );
-  assertEquals(code, 1);
-  assertStringIncludes(io.err, "chrome is not running");
 });
 
 // --- navigate ---
@@ -370,61 +277,6 @@ Deno.test("screenshot reports error from dep", async () => {
   );
   assertEquals(code, 1);
   assertStringIncludes(io.err, "chrome is not running");
-});
-
-// --- start --attach ---
-
-Deno.test("start --attach prints attached message with port", async () => {
-  const io = capture();
-  const code = await runCli(
-    ["start", "--attach"],
-    stubDeps({
-      app: {
-        start: (opts) => {
-          assertEquals(opts.attach, true);
-          return Promise.resolve({ status: "attached" as const, cdpPort: 9333 });
-        },
-      },
-      stdout: io.stdout,
-    }),
-  );
-  assertEquals(code, 0);
-  assertStringIncludes(io.out, "attached to Chrome");
-  assertStringIncludes(io.out, "9333");
-  assertStringIncludes(io.out, "scraper pages");
-});
-
-Deno.test("start --attach --channel passes channel option", async () => {
-  let receivedChannel: string | undefined;
-  const code = await runCli(
-    ["start", "--attach", "--channel", "beta"],
-    stubDeps({
-      app: {
-        start: (opts) => {
-          receivedChannel = opts.channel;
-          return Promise.resolve({ status: "attached" as const, cdpPort: 9333 });
-        },
-      },
-    }),
-  );
-  assertEquals(code, 0);
-  assertEquals(receivedChannel, "beta");
-});
-
-Deno.test("start already attached prints info without pid", async () => {
-  const io = capture();
-  const code = await runCli(
-    ["start", "--attach"],
-    stubDeps({
-      app: {
-        start: () => Promise.resolve({ status: "already_running" as const, cdpPort: 9333 }),
-      },
-      stdout: io.stdout,
-    }),
-  );
-  assertEquals(code, 0);
-  assertStringIncludes(io.out, "already attached");
-  assertStringIncludes(io.out, "9333");
 });
 
 // --- pages ---

@@ -1,5 +1,4 @@
 // Adapter: Chrome DevTools Protocol.
-export { type ChromeProcess, killChrome, launchChrome, type LaunchOptions } from "./chrome.ts";
 export {
   buildBrowserWsUrl,
   type CdpBrowserService,

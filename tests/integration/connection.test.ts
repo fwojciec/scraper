@@ -1,12 +1,12 @@
 import { assert, assertEquals, assertGreater, assertRejects } from "@std/assert";
-import { type ChromeProcess, killChrome, launchChrome } from "../../src/cdp/chrome.ts";
 import {
   type CdpPageService,
   createPageConnection,
   discoverWsUrl,
 } from "../../src/cdp/connection.ts";
+import { killTestChrome, launchTestChrome, type TestChrome } from "./test-chrome.ts";
 
-let chrome: ChromeProcess;
+let chrome: TestChrome;
 let targetId: string;
 let wsUrl: string;
 
@@ -31,7 +31,7 @@ async function discoverPageTarget(port: number): Promise<string> {
 
 /** Launch Chrome and discover the initial page target. */
 async function setup(): Promise<CdpPageService> {
-  chrome = await launchChrome();
+  chrome = await launchTestChrome();
   targetId = await discoverPageTarget(chrome.port);
   wsUrl = await discoverWsUrl(chrome.port);
   return await createPageConnection(wsUrl, targetId);
@@ -41,7 +41,7 @@ async function teardown(browser?: CdpPageService) {
   try {
     browser?.close();
   } catch { /* connection may not have been established */ }
-  await killChrome(chrome);
+  await killTestChrome(chrome);
 }
 
 Deno.test("navigate loads a page", async () => {
@@ -92,7 +92,7 @@ Deno.test("evaluate returns complex objects by value", async () => {
 Deno.test("screenshot returns a valid png file path", async () => {
   const browser = await setup();
   try {
-    await browser.navigate("about:blank");
+    await browser.navigate("data:text/html,<h1>screenshot</h1>");
     const path = await browser.screenshot();
     assert(path.endsWith(".png"));
     const stat = await Deno.stat(path);

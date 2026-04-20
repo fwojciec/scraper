@@ -1,35 +1,46 @@
 import { assertEquals, assertRejects } from "@std/assert";
 import type { CdpBrowserService, CdpPageService } from "../cdp/mod.ts";
-import type { JsonFileStore } from "../fs/mod.ts";
 import type { PageInfo, RefMap, SnapshotResult } from "../domain/mod.ts";
-import {
-  type AttachedState,
-  type ChromeState,
-  createScraperApp,
-  type OwnedState,
-  type ScraperAppDeps,
-} from "./mod.ts";
+import { createScraperApp, type RefsStore, type ScraperAppDeps, type TargetStore } from "./mod.ts";
 
 // ---------------------------------------------------------------------------
 // Test helpers
 // ---------------------------------------------------------------------------
 
-function createMemoryStore<T>(): JsonFileStore<T> & { data: T | null } {
-  const store = {
-    data: null as T | null,
+function createTargetStore(initial?: string | null): TargetStore & { data: string | null } {
+  const s = {
+    data: initial ?? null,
     read() {
-      return Promise.resolve(store.data);
+      return Promise.resolve(s.data);
     },
-    write(d: T) {
-      store.data = d;
+    write(t: string) {
+      s.data = t;
       return Promise.resolve();
     },
     remove() {
-      store.data = null;
+      s.data = null;
       return Promise.resolve();
     },
   };
-  return store;
+  return s;
+}
+
+function createRefsStore(initial?: RefMap | null): RefsStore & { data: RefMap | null } {
+  const s = {
+    data: initial ?? null,
+    read() {
+      return Promise.resolve(s.data);
+    },
+    write(r: RefMap) {
+      s.data = r;
+      return Promise.resolve();
+    },
+    remove() {
+      s.data = null;
+      return Promise.resolve();
+    },
+  };
+  return s;
 }
 
 /** Minimal CdpPageService stub. Override individual methods as needed. */
@@ -73,217 +84,25 @@ function stubBrowser(
 
 /** Default deps — all stubs. Clone and override per test. */
 function createDeps(overrides: Partial<ScraperAppDeps> = {}) {
-  const stateStore = createMemoryStore<ChromeState>();
-  const refsStore = createMemoryStore<RefMap>();
-  // Typed as ScraperAppDeps: compile error if interface gains new required fields.
+  const targetStore = createTargetStore(null);
+  const refsStore = createRefsStore(null);
   const base: ScraperAppDeps = {
-    launchChrome: () =>
-      Promise.resolve({
-        pid: 1234,
-        port: 9222,
-        userDataDir: "/tmp/chrome-data",
-        process: {
-          unref() {},
-          kill() {},
-          get status() {
-            return Promise.resolve({ success: true, code: 0, signal: null });
-          },
-        } as unknown as Deno.ChildProcess,
-      }),
-    defaultUserDataDir: () => "/default/chrome-data",
+    userDataDir: "/default/chrome-data",
     readDevToolsActivePort: () => Promise.resolve({ port: 9222, wsPath: "/devtools/browser/abc" }),
     buildBrowserWsUrl: (port, wsPath) => `ws://127.0.0.1:${port}${wsPath}`,
-    discoverWsUrl: () => Promise.resolve("ws://127.0.0.1:9222/devtools/browser/abc"),
     createBrowserConnection: () => Promise.resolve(stubBrowser()),
     createPageConnection: () => Promise.resolve(stubPage()),
     resolveTarget: () => Promise.resolve("obj-1"),
     createSnapshotService: () => ({
       snapshot: () => Promise.resolve({ yaml: "- text: hello\n", refs: { e1: 42 } }),
     }),
-    stateStore,
+    targetStore,
     refsStore,
-    isProcessAlive: () => true,
-    isOurChromeProcess: () => true,
-    killProcess: () => {},
-    removeDir: () => Promise.resolve(),
-    fetch: () =>
-      Promise.resolve(
-        new Response(JSON.stringify([{ type: "page", id: "target-1" }]), { status: 200 }),
-      ),
     warn: () => {},
     ...overrides,
   };
-  // Re-expose memory stores for test assertions (preserves .data access).
-  return { ...base, stateStore, refsStore };
+  return { ...base, targetStore, refsStore };
 }
-
-const ownedState: OwnedState = {
-  mode: "owned",
-  chromePid: 1234,
-  cdpPort: 9222,
-  userDataDir: "/tmp/chrome-data",
-  targetId: "target-1",
-};
-
-const attachedState: AttachedState = {
-  mode: "attached",
-  cdpPort: 9222,
-  wsPath: "/devtools/browser/abc",
-  targetId: "target-1",
-};
-
-// ---------------------------------------------------------------------------
-// start
-// ---------------------------------------------------------------------------
-
-Deno.test("start: launches Chrome when no state exists", async () => {
-  const deps = createDeps();
-  const app = createScraperApp(deps);
-  const result = await app.start({});
-  assertEquals(result, { status: "started", chromePid: 1234, cdpPort: 9222 });
-  assertEquals(deps.stateStore.data?.mode, "owned");
-});
-
-Deno.test("start: returns already_running for live owned Chrome", async () => {
-  const deps = createDeps();
-  deps.stateStore.data = ownedState;
-  const app = createScraperApp(deps);
-  const result = await app.start({});
-  assertEquals(result.status, "already_running");
-  assertEquals(result.chromePid, 1234);
-});
-
-Deno.test("start: cleans up dead Chrome and launches new", async () => {
-  const deps = createDeps({
-    isProcessAlive: () => false,
-  });
-  deps.stateStore.data = ownedState;
-  let removedDir = false;
-  deps.removeDir = () => {
-    removedDir = true;
-    return Promise.resolve();
-  };
-  const app = createScraperApp(deps);
-  const result = await app.start({});
-  assertEquals(result.status, "started");
-  assertEquals(removedDir, true);
-});
-
-Deno.test("start: removes foreign state and launches new", async () => {
-  const deps = createDeps({
-    isProcessAlive: () => true,
-    isOurChromeProcess: () => false,
-  });
-  deps.stateStore.data = ownedState;
-  const app = createScraperApp(deps);
-  const result = await app.start({});
-  assertEquals(result.status, "started");
-});
-
-Deno.test("start: throws when attached session exists", async () => {
-  const deps = createDeps();
-  deps.stateStore.data = attachedState;
-  const app = createScraperApp(deps);
-  await assertRejects(
-    () => app.start({}),
-    Error,
-    "already attached to Chrome",
-  );
-});
-
-Deno.test("start: throws when owned Chrome alive but CDP unresponsive", async () => {
-  const deps = createDeps({
-    fetch: () => Promise.reject(new Error("connection refused")),
-  });
-  deps.stateStore.data = ownedState;
-  const app = createScraperApp(deps);
-  await assertRejects(
-    () => app.start({}),
-    Error,
-    "not responding",
-  );
-});
-
-// ---------------------------------------------------------------------------
-// start --attach
-// ---------------------------------------------------------------------------
-
-Deno.test("start --attach: connects and writes attached state", async () => {
-  const deps = createDeps({
-    createBrowserConnection: () =>
-      Promise.resolve(stubBrowser({
-        listPages: () =>
-          Promise.resolve([{ pageId: "t1", url: "about:blank", title: "", active: false }]),
-      })),
-  });
-  const app = createScraperApp(deps);
-  const result = await app.start({ attach: true });
-  assertEquals(result.status, "attached");
-  assertEquals(deps.stateStore.data?.mode, "attached");
-});
-
-Deno.test("start --attach: already attached returns already_running", async () => {
-  const deps = createDeps();
-  deps.stateStore.data = attachedState;
-  const app = createScraperApp(deps);
-  const result = await app.start({ attach: true });
-  assertEquals(result.status, "already_running");
-});
-
-// ---------------------------------------------------------------------------
-// stop
-// ---------------------------------------------------------------------------
-
-Deno.test("stop: kills owned Chrome and cleans up", async () => {
-  let killed = false;
-  let processAliveCount = 0;
-  const deps = createDeps({
-    killProcess: () => {
-      killed = true;
-    },
-    isProcessAlive: () => {
-      processAliveCount++;
-      // First call: classifyOwnedState → alive. Second call: poll → dead.
-      return processAliveCount <= 1;
-    },
-  });
-  deps.stateStore.data = ownedState;
-  const app = createScraperApp(deps);
-  await app.stop();
-  assertEquals(killed, true);
-  assertEquals(deps.stateStore.data, null);
-});
-
-Deno.test("stop: cleans up dead owned Chrome", async () => {
-  const deps = createDeps({
-    isProcessAlive: () => false,
-  });
-  deps.stateStore.data = ownedState;
-  const app = createScraperApp(deps);
-  await app.stop();
-  assertEquals(deps.stateStore.data, null);
-  assertEquals(deps.refsStore.data, null);
-});
-
-Deno.test("stop: removes state for attached Chrome without killing", async () => {
-  let killed = false;
-  const deps = createDeps({
-    killProcess: () => {
-      killed = true;
-    },
-  });
-  deps.stateStore.data = attachedState;
-  const app = createScraperApp(deps);
-  await app.stop();
-  assertEquals(killed, false);
-  assertEquals(deps.stateStore.data, null);
-});
-
-Deno.test("stop: throws when no state", async () => {
-  const deps = createDeps();
-  const app = createScraperApp(deps);
-  await assertRejects(() => app.stop(), Error, "chrome is not running");
-});
 
 // ---------------------------------------------------------------------------
 // pages
@@ -298,17 +117,37 @@ Deno.test("pages: lists pages via browser connection", async () => {
     createBrowserConnection: () =>
       Promise.resolve(stubBrowser({ listPages: () => Promise.resolve(pageList) })),
   });
-  deps.stateStore.data = ownedState;
+  deps.targetStore.data = "t1";
   const app = createScraperApp(deps);
   const result = await app.pages();
   assertEquals(result, pageList);
+});
+
+Deno.test("pages: works with no target selected", async () => {
+  const pageList: PageInfo[] = [
+    { pageId: "t1", url: "about:blank", title: "", active: false },
+  ];
+  let receivedActive: string | undefined;
+  const deps = createDeps({
+    createBrowserConnection: () =>
+      Promise.resolve(stubBrowser({
+        listPages: (active) => {
+          receivedActive = active;
+          return Promise.resolve(pageList);
+        },
+      })),
+  });
+  const app = createScraperApp(deps);
+  const result = await app.pages();
+  assertEquals(result, pageList);
+  assertEquals(receivedActive, undefined);
 });
 
 // ---------------------------------------------------------------------------
 // selectPage
 // ---------------------------------------------------------------------------
 
-Deno.test("selectPage: updates state with new targetId", async () => {
+Deno.test("selectPage: persists targetId and clears refs", async () => {
   const deps = createDeps({
     createBrowserConnection: () =>
       Promise.resolve(
@@ -321,12 +160,11 @@ Deno.test("selectPage: updates state with new targetId", async () => {
         }),
       ),
   });
-  deps.stateStore.data = ownedState;
   deps.refsStore.data = { e1: 42 };
   const app = createScraperApp(deps);
   await app.selectPage("t2");
-  assertEquals(deps.stateStore.data?.targetId, "t2");
-  assertEquals(deps.refsStore.data, null); // refs cleared
+  assertEquals(deps.targetStore.data, "t2");
+  assertEquals(deps.refsStore.data, null);
 });
 
 Deno.test("selectPage: throws for unknown page", async () => {
@@ -341,7 +179,6 @@ Deno.test("selectPage: throws for unknown page", async () => {
         }),
       ),
   });
-  deps.stateStore.data = ownedState;
   const app = createScraperApp(deps);
   await assertRejects(() => app.selectPage("nope"), Error, "no page with id");
 });
@@ -366,7 +203,7 @@ Deno.test("navigate: calls page.navigate and waits for network idle", async () =
   const deps = createDeps({
     createPageConnection: () => Promise.resolve(page),
   });
-  deps.stateStore.data = ownedState;
+  deps.targetStore.data = "t1";
   const app = createScraperApp(deps);
   const result = await app.navigate("https://example.com");
   assertEquals(navigated, "https://example.com");
@@ -383,7 +220,7 @@ Deno.test("navigate: warns on network idle timeout", async () => {
     createPageConnection: () => Promise.resolve(page),
     warn: (msg) => warnings.push(msg),
   });
-  deps.stateStore.data = ownedState;
+  deps.targetStore.data = "t1";
   const app = createScraperApp(deps);
   await app.navigate("https://example.com");
   assertEquals(warnings.length, 1);
@@ -394,7 +231,7 @@ Deno.test("navigate: removes refs after navigation without snapshot", async () =
   const deps = createDeps({
     createPageConnection: () => Promise.resolve(stubPage()),
   });
-  deps.stateStore.data = ownedState;
+  deps.targetStore.data = "t1";
   deps.refsStore.data = { e1: 42 };
   const app = createScraperApp(deps);
   await app.navigate("https://example.com");
@@ -409,7 +246,7 @@ Deno.test("navigate: returns snapshot when includeSnapshot set", async () => {
       snapshot: () => Promise.resolve(snapshotResult),
     }),
   });
-  deps.stateStore.data = ownedState;
+  deps.targetStore.data = "t1";
   const app = createScraperApp(deps);
   const result = await app.navigate("https://example.com", { includeSnapshot: true });
   assertEquals(result.snapshot, snapshotResult);
@@ -423,7 +260,7 @@ Deno.test("snapshot: returns YAML and persists refs", async () => {
   const deps = createDeps({
     createPageConnection: () => Promise.resolve(stubPage()),
   });
-  deps.stateStore.data = ownedState;
+  deps.targetStore.data = "t1";
   const app = createScraperApp(deps);
   const result = await app.snapshot({});
   assertEquals(result.yaml, "- text: hello\n");
@@ -450,7 +287,7 @@ Deno.test("click: resolves target, clicks, runs post-action", async () => {
       return Promise.resolve("obj-1");
     },
   });
-  deps.stateStore.data = ownedState;
+  deps.targetStore.data = "t1";
   const app = createScraperApp(deps);
   await app.click({ ref: "e1" });
   assertEquals(clicked, true);
@@ -461,7 +298,7 @@ Deno.test("click: returns snapshot when includeSnapshot set", async () => {
   const deps = createDeps({
     createPageConnection: () => Promise.resolve(stubPage()),
   });
-  deps.stateStore.data = ownedState;
+  deps.targetStore.data = "t1";
   const app = createScraperApp(deps);
   const result = await app.click({ ref: "e1" }, { includeSnapshot: true });
   assertEquals(result.snapshot?.yaml, "- text: hello\n");
@@ -482,7 +319,7 @@ Deno.test("wait: selector delegates to page.waitForSelector", async () => {
   const deps = createDeps({
     createPageConnection: () => Promise.resolve(page),
   });
-  deps.stateStore.data = ownedState;
+  deps.targetStore.data = "t1";
   const app = createScraperApp(deps);
   await app.wait({ kind: "selector", selector: "#foo" });
   assertEquals(waitedSelector, "#foo");
@@ -499,7 +336,7 @@ Deno.test("wait: text delegates to page.waitForText", async () => {
   const deps = createDeps({
     createPageConnection: () => Promise.resolve(page),
   });
-  deps.stateStore.data = ownedState;
+  deps.targetStore.data = "t1";
   const app = createScraperApp(deps);
   await app.wait({ kind: "text", text: "hello" });
   assertEquals(waitedText, "hello");
@@ -509,16 +346,8 @@ Deno.test("wait: text delegates to page.waitForText", async () => {
 // connection lifecycle
 // ---------------------------------------------------------------------------
 
-Deno.test("throws when no state for page operations", async () => {
+Deno.test("throws when no target selected for page operations", async () => {
   const deps = createDeps();
-  const app = createScraperApp(deps);
-  await assertRejects(() => app.snapshot({}), Error, "chrome is not running");
-});
-
-Deno.test("throws when no targetId for page operations", async () => {
-  const noTargetState: AttachedState = { ...attachedState, targetId: undefined };
-  const deps = createDeps();
-  deps.stateStore.data = noTargetState;
   const app = createScraperApp(deps);
   await assertRejects(() => app.snapshot({}), Error, "no page selected");
 });
@@ -533,7 +362,7 @@ Deno.test("page connection is closed after operation", async () => {
   const deps = createDeps({
     createPageConnection: () => Promise.resolve(page),
   });
-  deps.stateStore.data = ownedState;
+  deps.targetStore.data = "t1";
   const app = createScraperApp(deps);
   await app.evaluate("1+1");
   assertEquals(closed, true);
@@ -550,8 +379,49 @@ Deno.test("page connection is closed even on error", async () => {
   const deps = createDeps({
     createPageConnection: () => Promise.resolve(page),
   });
-  deps.stateStore.data = ownedState;
+  deps.targetStore.data = "t1";
   const app = createScraperApp(deps);
   await assertRejects(() => app.evaluate("bad"), Error, "eval failed");
   assertEquals(closed, true);
+});
+
+Deno.test("stale target: clears target + refs when target no longer exists", async () => {
+  const deps = createDeps({
+    createPageConnection: () =>
+      Promise.reject(new Error("target no longer exists — run 'scraper pages' to pick a new tab")),
+  });
+  deps.targetStore.data = "dead-target";
+  deps.refsStore.data = { e1: 42 };
+  const app = createScraperApp(deps);
+  await assertRejects(() => app.snapshot({}), Error, "target no longer exists");
+  assertEquals(deps.targetStore.data, null);
+  assertEquals(deps.refsStore.data, null);
+});
+
+Deno.test("stale target: other errors don't clear state", async () => {
+  const deps = createDeps({
+    createPageConnection: () => Promise.reject(new Error("connection refused")),
+  });
+  deps.targetStore.data = "some-target";
+  deps.refsStore.data = { e1: 42 };
+  const app = createScraperApp(deps);
+  await assertRejects(() => app.snapshot({}), Error, "connection refused");
+  assertEquals(deps.targetStore.data, "some-target");
+  assertEquals(deps.refsStore.data, { e1: 42 });
+});
+
+Deno.test("reads DevToolsActivePort before connecting", async () => {
+  let readDir: string | undefined;
+  const deps = createDeps({
+    userDataDir: "/my/chrome",
+    readDevToolsActivePort: (dir) => {
+      readDir = dir;
+      return Promise.resolve({ port: 9222, wsPath: "/devtools/browser/abc" });
+    },
+    createPageConnection: () => Promise.resolve(stubPage()),
+  });
+  deps.targetStore.data = "t1";
+  const app = createScraperApp(deps);
+  await app.evaluate("1+1");
+  assertEquals(readDir, "/my/chrome");
 });

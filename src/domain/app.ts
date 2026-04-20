@@ -4,20 +4,6 @@ import type { EvalResult } from "./eval.ts";
 import type { PageId, PageInfo } from "./page.ts";
 import type { SnapshotOptions, SnapshotResult } from "./snapshot.ts";
 
-/** Options for the start command. */
-export interface StartOptions {
-  chromePath?: string;
-  attach?: boolean;
-  channel?: string;
-}
-
-/** Result of starting Chrome. */
-export interface StartResult {
-  status: "started" | "already_running" | "attached";
-  chromePid?: number;
-  cdpPort: number;
-}
-
 /**
  * What to wait for — discriminated union that makes invalid states
  * unrepresentable. Replaces the loosely-typed WaitOptions bag.
@@ -29,8 +15,6 @@ export type WaitRequest =
 
 /** Application-level contract for the scraper. */
 export interface ScraperApp {
-  start(options: StartOptions): Promise<StartResult>;
-  stop(): Promise<void>;
   pages(): Promise<PageInfo[]>;
   selectPage(pageId: PageId): Promise<void>;
   navigate(url: string, options?: ActionOptions): Promise<ActionResult>;

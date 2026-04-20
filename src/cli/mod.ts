@@ -18,8 +18,6 @@ export interface CliDeps {
 const USAGE = `Usage: scraper <command> [options]
 
 Commands:
-  start       Launch or attach to Chrome
-  stop        Stop Chrome
   navigate    Navigate to a URL
   snapshot    Generate an ARIA snapshot
   eval        Evaluate JavaScript
@@ -37,7 +35,7 @@ Commands:
 `;
 
 /** Flags that never take a value argument. */
-const BOOLEAN_FLAGS = new Set(["snapshot", "attach", "full-page"]);
+const BOOLEAN_FLAGS = new Set(["snapshot", "full-page"]);
 
 function parseFlags(
   args: string[],
@@ -133,49 +131,6 @@ function outputActionResult(
   deps.stderr(statusLine + "\n");
   if (result.snapshot) {
     deps.stdout(result.snapshot.yaml);
-  }
-}
-
-async function handleStart(args: string[], deps: CliDeps): Promise<number> {
-  const { flags } = parseFlags(args);
-  const chromePath = flagString(flags, "chrome-path");
-  const attach = flagBoolean(flags, "attach");
-  const channel = flagString(flags, "channel");
-
-  try {
-    const result = await deps.app.start({ chromePath, attach, channel });
-    if (result.status === "already_running") {
-      if (result.chromePid) {
-        deps.stdout(`chrome already running (pid ${result.chromePid})\n`);
-      } else {
-        deps.stdout(`already attached to Chrome (port ${result.cdpPort})\n`);
-      }
-    } else if (result.status === "attached") {
-      deps.stdout(
-        `attached to Chrome (port ${result.cdpPort}). Run 'scraper pages' to list tabs.\n`,
-      );
-    } else {
-      deps.stdout(
-        `chrome started (pid ${result.chromePid}, cdp port ${result.cdpPort})\n`,
-      );
-    }
-    return 0;
-  } catch (err) {
-    deps.stderr(
-      `error: failed to start chrome: ${err instanceof Error ? err.message : err}\n`,
-    );
-    return 1;
-  }
-}
-
-async function handleStop(deps: CliDeps): Promise<number> {
-  try {
-    await deps.app.stop();
-    deps.stdout("chrome stopped\n");
-    return 0;
-  } catch (err) {
-    deps.stderr(`error: ${err instanceof Error ? err.message : err}\n`);
-    return 1;
   }
 }
 
@@ -638,10 +593,6 @@ export function runCli(args: string[], deps: CliDeps): Promise<number> {
   }
 
   switch (command) {
-    case "start":
-      return handleStart(rest, deps);
-    case "stop":
-      return handleStop(deps);
     case "navigate":
       return handleNavigate(rest, deps);
     case "snapshot":

@@ -722,7 +722,7 @@ selectors via attribute/class changes (not node insertion):
 <div id="attr-target">waiting</div>
 <button
   id="add-class-btn"
-  onclick="setTimeout(() => document.getElementById('attr-target').classList.add('ready'), 200)"
+  onclick='setTimeout(() => document.getElementById("attr-target").classList.add("ready"), 200)'
 >
   Add Class
 </button>
@@ -731,7 +731,7 @@ selectors via attribute/class changes (not node insertion):
 <div id="hidden-text" style="display: none">Secret Text</div>
 <button
   id="show-text-btn"
-  onclick="setTimeout(() => document.getElementById('hidden-text').style.display = '', 200)"
+  onclick='setTimeout(() => document.getElementById("hidden-text").style.display = "", 200)'
 >
   Show
 </button>
@@ -740,7 +740,7 @@ selectors via attribute/class changes (not node insertion):
 <div id="ancestor-wrapper" style="display: none"><span id="nested-text">Nested Secret</span></div>
 <button
   id="show-ancestor-btn"
-  onclick="setTimeout(() => document.getElementById('ancestor-wrapper').style.display = '', 200)"
+  onclick='setTimeout(() => document.getElementById("ancestor-wrapper").style.display = "", 200)'
 >
   Show Ancestor
 </button>

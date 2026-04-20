@@ -6,20 +6,26 @@ allowed-tools: Bash
 
 # Codex Working-Tree Review
 
-One-shot, non-interactive review of the current working tree (staged + unstaged + untracked). Blocks until Codex finishes and prints findings verbatim.
+One-shot, non-interactive review of the current working tree (staged + unstaged + untracked). Blocks
+until Codex finishes and prints findings verbatim.
 
-The slash-command `/codex:review` is interactive — it asks whether to wait or run in the background. This skill wraps the underlying `codex-companion.mjs` script with `--wait --scope working-tree` so it is safe to call from autonomous loops.
+The slash-command `/codex:review` is interactive — it asks whether to wait or run in the background.
+This skill wraps the underlying `codex-companion.mjs` script with `--wait --scope working-tree` so
+it is safe to call from autonomous loops.
 
 ## When to use
 
 - `ralph` / `work` skills or any automation that needs a review without prompts.
 - A pre-commit gate before the skill commits its work.
 
-Not for: branch-level reviews across many commits (use `/codex:review --scope branch` manually), adversarial or design reviews (use `/codex:adversarial-review`), or Codex-driven fixing (use `/codex:rescue`).
+Not for: branch-level reviews across many commits (use `/codex:review --scope branch` manually),
+adversarial or design reviews (use `/codex:adversarial-review`), or Codex-driven fixing (use
+`/codex:rescue`).
 
 ## Pre-flight
 
-Codex must be installed and authenticated. If the command fails with "codex plugin missing" or an auth error, run `/codex:setup` and retry.
+Codex must be installed and authenticated. If the command fails with "codex plugin missing" or an
+auth error, run `/codex:setup` and retry.
 
 ## Run
 
@@ -30,13 +36,17 @@ node "$CODEX" review --wait --scope working-tree
 ```
 
 - `--wait` runs in the foreground and blocks until complete — no polling needed.
-- `--scope working-tree` covers staged, unstaged, and untracked files (equivalent to the old `roborev review --dirty`).
+- `--scope working-tree` covers staged, unstaged, and untracked files (equivalent to the old
+  `roborev review --dirty`).
 - stdout is the full Codex verdict. Return it verbatim — do not paraphrase.
 
 ## Cost guardrail
 
-Each invocation is a paid Codex call. **Never re-run on an unchanged working tree to "retry".** Callers (ralph, work) enforce their own per-issue review budget; this skill does not.
+Each invocation is a paid Codex call. **Never re-run on an unchanged working tree to "retry".**
+Callers (ralph, work) enforce their own per-issue review budget; this skill does not.
 
 ## Output contract
 
-Codex prints a block containing: verdict, summary, findings (severity + file:line + description), and any follow-up suggestions. The calling skill consumes that block directly — no further processing here.
+Codex prints a block containing: verdict, summary, findings (severity + file:line + description),
+and any follow-up suggestions. The calling skill consumes that block directly — no further
+processing here.
