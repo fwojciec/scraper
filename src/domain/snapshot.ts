@@ -52,4 +52,10 @@ export interface SnapshotResult {
    * next snapshot starts at `lastRefCounter + 1`.
    */
   lastRefCounter: number;
+  /** Artifact ID assigned to this snapshot (e.g. `s47`). Echoed from the request. */
+  snapshotId: string;
+  /** Page title at capture time. Echoed from the request. Empty string is common. */
+  title: string;
+  /** Page URL at capture time. Echoed from the request. */
+  url: string;
 }

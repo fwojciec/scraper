@@ -18,7 +18,17 @@ Deno.test("CLI E2E: attach → navigate → snapshot → eval → screenshot", a
 
     const snap = await runScraper(["snapshot", "--tab", rt.targetId], rt.env);
     assertEquals(snap.code, 0, `snapshot failed: ${snap.stderr}`);
-    assert(snap.stdout.includes("table"), "snapshot should contain table role");
+    // Stdout is the one-line pointer (see design §Snapshot Artifact). The
+    // full YAML tree lives in ~/.scraper/s{N}.yaml; we verify it separately
+    // via other tests so don't assert ARIA roles on stdout here.
+    const pointerLines = snap.stdout.split("\n").filter((l) => l.length > 0);
+    assertEquals(pointerLines.length, 1, `expected single pointer line, got: ${snap.stdout}`);
+    const pointer = pointerLines[0];
+    assert(
+      /^snapshot s\d+ · .+ · \d+ refs · \d+B$/.test(pointer),
+      `pointer should match design format, got: ${pointer}`,
+    );
+    assert(pointer.includes("Bestsellers"), "pointer label should be the page title");
 
     const evalResult = await runScraper(
       ["eval", "--tab", rt.targetId, "document.querySelector('h1').textContent"],

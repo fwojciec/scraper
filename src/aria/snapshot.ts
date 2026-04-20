@@ -65,7 +65,14 @@ export function createSnapshotService(deps: SnapshotDeps): SnapshotService {
       const tree = treeBody.length === 0 ? "tree: []" : "tree:\n" + treeBody.trimEnd();
 
       const yaml = `${header}\n${tree}\n`;
-      return { yaml, refs, lastRefCounter };
+      return {
+        yaml,
+        refs,
+        lastRefCounter,
+        snapshotId: request.snapshotId,
+        title: request.title,
+        url: request.url,
+      };
     },
   };
 }

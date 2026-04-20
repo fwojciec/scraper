@@ -7,7 +7,15 @@ const FULL_TAB = "4AE7B2C9E1D4F0A2B8C6E1F3A5D9B7C2";
 function stubApp(overrides: Partial<ScraperApp> = {}): ScraperApp {
   return {
     navigate: () => Promise.resolve({}),
-    snapshot: () => Promise.resolve({ yaml: "- heading", refs: {}, lastRefCounter: 0 }),
+    snapshot: () =>
+      Promise.resolve({
+        yaml: "- heading",
+        refs: {},
+        lastRefCounter: 0,
+        snapshotId: "s1",
+        title: "",
+        url: "https://example.com/",
+      }),
     evaluate: () => Promise.resolve({ result: null }),
     screenshot: () => Promise.resolve("/tmp/shot.png"),
     wait: () => Promise.resolve(),
@@ -186,7 +194,14 @@ Deno.test("--tab prefix is canonicalized and the full id is passed to the app", 
       app: {
         snapshot: (targetId) => {
           receivedTargetId = targetId;
-          return Promise.resolve({ yaml: "", refs: {}, lastRefCounter: 0 });
+          return Promise.resolve({
+            yaml: "",
+            refs: {},
+            lastRefCounter: 0,
+            snapshotId: "s1",
+            title: "",
+            url: "https://example.com/",
+          });
         },
       },
     }),
@@ -203,7 +218,14 @@ Deno.test("--tab full id is a no-op canonicalization (same id passed through)", 
       app: {
         snapshot: (targetId) => {
           receivedTargetId = targetId;
-          return Promise.resolve({ yaml: "", refs: {}, lastRefCounter: 0 });
+          return Promise.resolve({
+            yaml: "",
+            refs: {},
+            lastRefCounter: 0,
+            snapshotId: "s1",
+            title: "",
+            url: "https://example.com/",
+          });
         },
       },
     }),
@@ -266,7 +288,14 @@ Deno.test("navigate --snapshot outputs YAML to stdout and status to stderr", asy
         navigate: (_targetId, _url, opts) => {
           assertEquals(opts?.includeSnapshot, true);
           return Promise.resolve({
-            snapshot: { yaml: "- heading\n", refs: {}, lastRefCounter: 0 },
+            snapshot: {
+              yaml: "- heading\n",
+              refs: {},
+              lastRefCounter: 0,
+              snapshotId: "s1",
+              title: "",
+              url: "https://example.com/",
+            },
           });
         },
       },
@@ -281,18 +310,82 @@ Deno.test("navigate --snapshot outputs YAML to stdout and status to stderr", asy
 
 // --- snapshot ---
 
-Deno.test("snapshot prints YAML", async () => {
+Deno.test("snapshot prints the one-line pointer (id · title · refs · bytes)", async () => {
   const io = capture();
-  const yaml = '- main:\n    - heading "Hello"';
+  const yaml = 'snapshot: s47\ntree:\n  - heading "Hello"\n';
+  const expectedBytes = new TextEncoder().encode(yaml).byteLength;
   const code = await runCli(
     ["snapshot", "--tab", "4AE7"],
     stubDeps({
-      app: { snapshot: () => Promise.resolve({ yaml, refs: {}, lastRefCounter: 0 }) },
+      app: {
+        snapshot: () =>
+          Promise.resolve({
+            yaml,
+            refs: { e1: 10, e2: 20 },
+            lastRefCounter: 2,
+            snapshotId: "s47",
+            title: "Direct Medical Reimbursement",
+            url: "https://memberforms.uhc.com/",
+          }),
+      },
       stdout: io.stdout,
     }),
   );
   assertEquals(code, 0);
-  assertEquals(io.out, yaml);
+  // One line, trailing newline, exact pointer shape from the design doc.
+  assertEquals(
+    io.out,
+    `snapshot s47 · Direct Medical Reimbursement · 2 refs · ${expectedBytes}B\n`,
+  );
+});
+
+Deno.test("snapshot pointer flattens newlines/tabs in title to preserve one-line contract", async () => {
+  const io = capture();
+  const code = await runCli(
+    ["snapshot", "--tab", "4AE7"],
+    stubDeps({
+      app: {
+        snapshot: () =>
+          Promise.resolve({
+            yaml: "tree: []\n",
+            refs: {},
+            lastRefCounter: 0,
+            snapshotId: "s9",
+            title: "Dialog\nAppeared\there",
+            url: "https://example.com/",
+          }),
+      },
+      stdout: io.stdout,
+    }),
+  );
+  assertEquals(code, 0);
+  // Must be exactly one line (plus trailing newline).
+  const lines = io.out.split("\n").filter((l) => l.length > 0);
+  assertEquals(lines.length, 1, `expected 1 line, got: ${JSON.stringify(io.out)}`);
+  assertStringIncludes(lines[0], "Dialog Appeared here");
+});
+
+Deno.test("snapshot pointer falls back to url when title is empty", async () => {
+  const io = capture();
+  const code = await runCli(
+    ["snapshot", "--tab", "4AE7"],
+    stubDeps({
+      app: {
+        snapshot: () =>
+          Promise.resolve({
+            yaml: "tree: []\n",
+            refs: {},
+            lastRefCounter: 0,
+            snapshotId: "s3",
+            title: "",
+            url: "https://example.com/blank",
+          }),
+      },
+      stdout: io.stdout,
+    }),
+  );
+  assertEquals(code, 0);
+  assertStringIncludes(io.out, "snapshot s3 · https://example.com/blank · 0 refs");
 });
 
 Deno.test("snapshot passes all options", async () => {
@@ -313,7 +406,14 @@ Deno.test("snapshot passes all options", async () => {
       app: {
         snapshot: (_targetId, opts: Record<string, unknown>) => {
           receivedOpts = { ...opts };
-          return Promise.resolve({ yaml: "- heading", refs: {}, lastRefCounter: 0 });
+          return Promise.resolve({
+            yaml: "- heading",
+            refs: {},
+            lastRefCounter: 0,
+            snapshotId: "s1",
+            title: "",
+            url: "https://example.com/",
+          });
         },
       },
     }),
@@ -669,7 +769,14 @@ Deno.test("upload --snapshot outputs YAML", async () => {
         upload: (_targetId, _target, _path, opts) => {
           assertEquals(opts?.includeSnapshot, true);
           return Promise.resolve({
-            snapshot: { yaml: "- textbox\n", refs: {}, lastRefCounter: 0 },
+            snapshot: {
+              yaml: "- textbox\n",
+              refs: {},
+              lastRefCounter: 0,
+              snapshotId: "s1",
+              title: "",
+              url: "https://example.com/",
+            },
           });
         },
       },

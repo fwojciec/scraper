@@ -118,6 +118,9 @@ function createDeps(overrides: Partial<ScraperAppDeps> = {}) {
           yaml: `snapshot: ${req.snapshotId}\ntargetId: ${req.targetId}\ntree: []\n`,
           refs: { [`e${(req.startingRefCounter ?? 0) + 1}`]: 42 },
           lastRefCounter: (req.startingRefCounter ?? 0) + 1,
+          snapshotId: req.snapshotId,
+          title: req.title,
+          url: req.url,
         }),
     }),
     refsStore,
@@ -203,6 +206,9 @@ Deno.test("navigate: returns snapshot when includeSnapshot set", async () => {
     yaml: "snapshot: s1\ntree: []\n",
     refs: { e1: 1 },
     lastRefCounter: 1,
+    snapshotId: "s1",
+    title: "Example",
+    url: "https://example.com/",
   };
   const deps = createDeps({
     createPageConnection: () => Promise.resolve(stubPage()),
@@ -255,6 +261,9 @@ Deno.test("snapshot: ref counter survives across tabs so tab B starts after tab 
           yaml: `snapshot: ${req.snapshotId}\ntree: []\n`,
           refs,
           lastRefCounter: start + count,
+          snapshotId: req.snapshotId,
+          title: req.title,
+          url: req.url,
         });
       },
     }),
@@ -285,6 +294,9 @@ Deno.test("snapshot: empty snapshot clears this tab's prior refs file", async ()
           yaml: `snapshot: ${req.snapshotId}\ntree: []\n`,
           refs: {},
           lastRefCounter: req.startingRefCounter ?? 0,
+          snapshotId: req.snapshotId,
+          title: req.title,
+          url: req.url,
         }),
     }),
   });
@@ -306,6 +318,9 @@ Deno.test("snapshot: does not write ref counter when snapshot minted no refs", a
           yaml: `snapshot: ${req.snapshotId}\ntree: []\n`,
           refs: {},
           lastRefCounter: req.startingRefCounter ?? 0,
+          snapshotId: req.snapshotId,
+          title: req.title,
+          url: req.url,
         }),
     }),
   });
@@ -344,7 +359,14 @@ Deno.test("snapshot: passes snapshotId, targetId, url, and title to the service"
     createSnapshotService: () => ({
       snapshot: (req) => {
         received = req;
-        return Promise.resolve({ yaml: "", refs: {}, lastRefCounter: 0 });
+        return Promise.resolve({
+          yaml: "",
+          refs: {},
+          lastRefCounter: 0,
+          snapshotId: req.snapshotId,
+          title: req.title,
+          url: req.url,
+        });
       },
     }),
   });

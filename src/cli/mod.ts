@@ -1,6 +1,6 @@
 // Adapter: CLI (Deno.args). Direct CDP operations, no HTTP server.
 
-import type { ElementTarget, ScraperApp, WaitRequest } from "../domain/mod.ts";
+import type { ElementTarget, ScraperApp, SnapshotResult, WaitRequest } from "../domain/mod.ts";
 
 /** A single page tab as returned by `listTabs` — only page-type targets. */
 export interface TabInfo {
@@ -170,6 +170,31 @@ async function handleNavigate(args: string[], deps: CliDeps): Promise<number> {
   }
 }
 
+const POINTER_ENCODER = new TextEncoder();
+
+/**
+ * Replace every ASCII control char (incl. newlines, tabs, DEL) with a space and
+ * collapse resulting whitespace runs — page titles are arbitrary strings and
+ * must not break the pointer's one-line stdout contract.
+ */
+function sanitizeLabel(s: string): string {
+  // deno-lint-ignore no-control-regex
+  return s.replace(/[\x00-\x1f\x7f]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Format the one-line snapshot pointer printed to stdout.
+ * Shape: `snapshot <id> · <title or url> · <n> refs · <bytes>B`
+ * See Tier B design doc §Snapshot Artifact — pointer format.
+ */
+function snapshotPointer(result: SnapshotResult): string {
+  const rawLabel = result.title !== "" ? result.title : result.url;
+  const label = sanitizeLabel(rawLabel);
+  const refCount = Object.keys(result.refs).length;
+  const bytes = POINTER_ENCODER.encode(result.yaml).byteLength;
+  return `snapshot ${result.snapshotId} · ${label} · ${refCount} refs · ${bytes}B`;
+}
+
 async function handleSnapshot(args: string[], deps: CliDeps): Promise<number> {
   const { flags } = parseFlags(args);
   const [targetId, tabErr] = await resolveTabFlag(flags, deps);
@@ -191,7 +216,7 @@ async function handleSnapshot(args: string[], deps: CliDeps): Promise<number> {
 
   try {
     const result = await deps.app.snapshot(targetId!, { maxDepth, maxNodes, selector });
-    deps.stdout(result.yaml);
+    deps.stdout(snapshotPointer(result) + "\n");
     return 0;
   } catch (err) {
     deps.stderr(`error: ${err instanceof Error ? err.message : err}\n`);

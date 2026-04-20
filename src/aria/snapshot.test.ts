@@ -263,3 +263,15 @@ Deno.test("snapshot YAML renders targetId as canonical 32-hex string", async () 
   assertStringIncludes(result.yaml, `targetId: ${FULL_TAB}`);
   assertEquals(FULL_TAB.length, 32);
 });
+
+Deno.test("snapshot result echoes snapshotId, title, and url for pointer formatting", async () => {
+  const svc = createSnapshotService(mockDeps([]));
+  const result = await svc.snapshot(req({
+    snapshotId: "s47",
+    title: "Direct Medical Reimbursement",
+    url: "https://memberforms.uhc.com/DirectMedicalReimbursement.html",
+  }));
+  assertEquals(result.snapshotId, "s47");
+  assertEquals(result.title, "Direct Medical Reimbursement");
+  assertEquals(result.url, "https://memberforms.uhc.com/DirectMedicalReimbursement.html");
+});
