@@ -45,6 +45,20 @@ export interface CdpPageService {
 /** Browser-level CDP connection — not attached to any target. */
 export interface CdpBrowserService {
   listPages(activeTargetId?: string): Promise<PageInfo[]>;
+  /**
+   * Create a new page target via `Target.createTarget` and return its full
+   * targetId. Pass a real URL for the initial navigation; the network-idle
+   * wait that gates auto-snapshot still happens via the page connection
+   * after attach.
+   */
+  createTarget(url: string): Promise<string>;
+  /**
+   * Close a target via `Target.closeTarget`. Used to roll back a `--new` tab
+   * when later steps (attach/navigate/snapshot) fail — otherwise a failed
+   * `navigate --new` would leak a blank tab in Chrome that the caller cannot
+   * address (the targetId is only printed on success).
+   */
+  closeTarget(targetId: string): Promise<void>;
   close(): void;
 }
 
@@ -98,6 +112,18 @@ export async function createBrowserConnection(
       }));
   }
 
+  async function createTarget(url: string): Promise<string> {
+    const { targetId } = await cdp.Target.createTarget({ url });
+    if (typeof targetId !== "string" || targetId.length === 0) {
+      throw new Error("Target.createTarget did not return a targetId");
+    }
+    return targetId;
+  }
+
+  async function closeTarget(targetId: string): Promise<void> {
+    await cdp.Target.closeTarget({ targetId });
+  }
+
   function close(): void {
     try {
       cdp.connection?.close();
@@ -106,7 +132,7 @@ export async function createBrowserConnection(
     }
   }
 
-  return { listPages, close };
+  return { listPages, createTarget, closeTarget, close };
 }
 
 /** Create a page-level CDP connection, attaching to a specific target. */
@@ -155,7 +181,14 @@ export async function createPageConnection(
   }
 
   async function navigate(url: string): Promise<void> {
-    await cdp.Page.navigate({ url }, sessionId);
+    const response = await cdp.Page.navigate({ url }, sessionId);
+    // CDP signals failure (bad URL, blocked scheme, net errors) via the
+    // optional errorText field rather than rejecting the call. Without this
+    // guard navigate() resolves successfully on a still-blank tab — the
+    // caller then snapshots that blank page and reports success.
+    if (typeof response?.errorText === "string" && response.errorText.length > 0) {
+      throw new Error(`navigation failed: ${response.errorText}`);
+    }
     if (url !== "about:blank") {
       await waitForLoad(cdp, sessionId);
     }

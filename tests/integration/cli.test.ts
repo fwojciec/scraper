@@ -14,7 +14,13 @@ Deno.test("CLI E2E: attach → navigate → snapshot → eval → screenshot", a
       rt.env,
     );
     assertEquals(nav.code, 0, `navigate failed: ${nav.stderr}`);
-    assertStringIncludes(nav.stdout, "navigated to");
+    // navigate auto-snapshots and emits `navigated · snapshot s{N} · ...`.
+    const navLines = nav.stdout.split("\n").filter((l) => l.length > 0);
+    assertEquals(navLines.length, 1, `expected single pointer line, got: ${nav.stdout}`);
+    assert(
+      /^navigated · snapshot s\d+ · .+ · \d+ refs · \d+B$/.test(navLines[0]),
+      `pointer should match design format, got: ${navLines[0]}`,
+    );
 
     const snap = await runScraper(["snapshot", "--tab", rt.targetId], rt.env);
     assertEquals(snap.code, 0, `snapshot failed: ${snap.stderr}`);
@@ -199,8 +205,9 @@ Deno.test("CLI: screenshot writes shot{N}.png into ~/.scraper using the shared a
     const shot = await runScraper(["screenshot", "--tab", rt.targetId], rt.env);
     assertEquals(shot.code, 0, `screenshot failed: ${shot.stderr}`);
     const shotPath = shot.stdout.trim();
-    // Shared counter: first snapshot consumed s1; this screenshot consumes shot2.
-    assertEquals(shotPath, `${rt.tmpHome}/.scraper/shot2.png`);
+    // Shared counter: navigate auto-snapshots (s1), explicit snapshot above
+    // (s2), this screenshot consumes shot3.
+    assertEquals(shotPath, `${rt.tmpHome}/.scraper/shot3.png`);
     const stat = await Deno.stat(shotPath);
     assert(stat.size > 0, "screenshot file should not be empty");
   } finally {
@@ -292,6 +299,94 @@ Deno.test("CLI: tabs is a no-op (exit 0) when ~/.scraper does not exist yet", as
     }
     const result = await runScraper(["tabs"], rt.env);
     assertEquals(result.code, 0, `tabs failed: ${result.stderr}`);
+  } finally {
+    await stopTestRuntime(rt);
+  }
+});
+
+Deno.test("CLI: navigate --new opens a new tab, prints its targetId, and auto-snapshots", async () => {
+  const rt = await startTestRuntime();
+  const fixtures = startFixtureServer();
+  try {
+    const nav = await runScraper(
+      ["navigate", "--new", fixtures.url("bestseller-table.html")],
+      rt.env,
+    );
+    assertEquals(nav.code, 0, `navigate --new failed: ${nav.stderr}`);
+    const lines = nav.stdout.split("\n").filter((l) => l.length > 0);
+    assertEquals(lines.length, 2, `expected 2 stdout lines, got: ${nav.stdout}`);
+    const newTargetId = lines[0];
+    // Full 32-hex targetId so agents can copy any prefix to address it.
+    assert(/^[0-9A-F]{32}$/.test(newTargetId), `expected hex targetId, got: ${newTargetId}`);
+    // Distinct from the runtime's initial page tab.
+    assert(
+      newTargetId !== rt.targetId,
+      `--new should open a different tab, got the existing one: ${newTargetId}`,
+    );
+    assert(
+      /^snapshot s\d+ · .+ · \d+ refs · \d+B$/.test(lines[1]),
+      `pointer should match design format, got: ${lines[1]}`,
+    );
+
+    // The new tab is addressable on subsequent commands by any prefix.
+    const tabs = await runScraper(["tabs"], rt.env);
+    assertStringIncludes(tabs.stdout, newTargetId);
+
+    const evalResult = await runScraper(
+      ["eval", "--tab", newTargetId.slice(0, 8), "document.querySelector('h1').textContent"],
+      rt.env,
+    );
+    assertEquals(evalResult.code, 0, `eval against new tab failed: ${evalResult.stderr}`);
+    assertStringIncludes(evalResult.stdout, "Top Bestselling Books");
+  } finally {
+    await fixtures.close();
+    await stopTestRuntime(rt);
+  }
+});
+
+Deno.test("CLI: navigate --new waits for network idle before snapshotting", async () => {
+  const rt = await startTestRuntime();
+  const fixtures = startFixtureServer();
+  try {
+    const nav = await runScraper(
+      ["navigate", "--new", fixtures.url("slow-loading.html")],
+      rt.env,
+    );
+    assertEquals(nav.code, 0, `navigate --new failed: ${nav.stderr}`);
+    const lines = nav.stdout.split("\n").filter((l) => l.length > 0);
+    const newTargetId = lines[0];
+    // The slow-loading fixture starts an in-flight fetch from JS that doesn't
+    // resolve for ~1500ms — well past waitForNetworkIdle's 500ms grace. If
+    // the auto-snapshot ran before network idle, the heading would still
+    // read "Pending"; if it waited, it must read "Ready".
+    const snapshotPath = `${rt.tmpHome}/.scraper/s1.yaml`;
+    const yaml = await Deno.readTextFile(snapshotPath);
+    assertStringIncludes(
+      yaml,
+      "Ready",
+      `snapshot should reflect post-load state; got: ${yaml}`,
+    );
+    assert(
+      !yaml.includes("Pending"),
+      `snapshot should not still show pre-load state; got: ${yaml}`,
+    );
+    // Sanity-check the new tab is real and addressable.
+    assert(/^[0-9A-F]{32}$/.test(newTargetId), `expected hex targetId, got: ${newTargetId}`);
+  } finally {
+    await fixtures.close();
+    await stopTestRuntime(rt);
+  }
+});
+
+Deno.test("CLI: navigate --tab and --new are mutually exclusive", async () => {
+  const rt = await startTestRuntime();
+  try {
+    const result = await runScraper(
+      ["navigate", "--new", "--tab", rt.targetId, "https://example.com"],
+      rt.env,
+    );
+    assertEquals(result.code, 1);
+    assertStringIncludes(result.stderr, "mutually exclusive");
   } finally {
     await stopTestRuntime(rt);
   }

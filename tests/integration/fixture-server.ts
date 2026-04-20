@@ -12,7 +12,19 @@ export function startFixtureServer(): FixtureServer {
   const server = Deno.serve(
     { port: 0, hostname: "127.0.0.1", onListen: () => {} },
     async (req) => {
-      const reqPath = new URL(req.url).pathname.slice(1);
+      const url = new URL(req.url);
+      // /delay?ms=N&text=... — delay then respond with `text` (default "ok").
+      // Used by slow-loading fixtures to keep network in-flight past the
+      // default 500ms grace so waitForNetworkIdle can be observed.
+      if (url.pathname === "/delay") {
+        const ms = Number(url.searchParams.get("ms") ?? "0");
+        const text = url.searchParams.get("text") ?? "ok";
+        if (ms > 0) await new Promise((r) => setTimeout(r, ms));
+        return new Response(text, {
+          headers: { "Content-Type": "text/plain; charset=utf-8" },
+        });
+      }
+      const reqPath = url.pathname.slice(1);
       const fileUrl = new URL(reqPath, FIXTURES_BASE);
       if (!fileUrl.href.startsWith(FIXTURES_BASE.href)) {
         return new Response("Forbidden", { status: 403 });

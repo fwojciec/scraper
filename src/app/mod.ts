@@ -5,12 +5,13 @@
 // connection. No process-lifecycle bookkeeping, no persisted chrome.json, no
 // active target — callers address every tab explicitly via a canonical targetId.
 
-import type { CdpPageService } from "../cdp/mod.ts";
+import type { CdpBrowserService, CdpPageService } from "../cdp/mod.ts";
 import type { SnapshotDeps } from "../aria/mod.ts";
 import type {
   ActionOptions,
   ActionResult,
   ElementTarget,
+  NavigateNewResult,
   RefMap,
   ScraperApp,
   SnapshotService,
@@ -50,6 +51,12 @@ export interface ScraperAppDeps {
   readDevToolsActivePort(dir: string): Promise<{ port: number; wsPath: string }>;
   buildBrowserWsUrl(port: number, wsPath: string): string;
   createPageConnection(wsUrl: string, targetId: string): Promise<CdpPageService>;
+  /**
+   * Browser-level CDP connection used by `navigate --new` to call
+   * `Target.createTarget`. Page-scoped commands continue to use
+   * `createPageConnection` directly.
+   */
+  createBrowserConnection(wsUrl: string): Promise<CdpBrowserService>;
   resolveTarget(
     target: ElementTarget,
     page: CdpPageService,
@@ -216,6 +223,12 @@ export function createScraperApp(deps: ScraperAppDeps): ScraperApp {
       return withPageConnection(targetId, async (page) => {
         return await withDialogHandling(page, async () => {
           await page.navigate(url);
+          // Page context changed — invalidate this tab's refs eagerly, before
+          // the optional snapshot runs. If snapshotting then fails (AX-tree
+          // error, disk write failure), the agent gets "stale ref" instead
+          // of silently resolving against the prior page's DOM. doSnapshot
+          // overwrites this file with fresh refs on success.
+          await deps.refsStore.remove(targetId);
           if (opts?.includeSnapshot) {
             return await postAction(page, targetId, opts);
           }
@@ -223,12 +236,57 @@ export function createScraperApp(deps: ScraperAppDeps): ScraperApp {
           if (timedOut) {
             deps.warn("warning: network idle timed out — page may still be loading\n");
           }
-          // Page context changed — invalidate this tab's refs. The monotonic
-          // cross-tab counter is preserved so refs never reuse an ID.
-          await deps.refsStore.remove(targetId);
           return {};
         });
       });
+    },
+    async navigateNew(url: string): Promise<NavigateNewResult> {
+      const wsUrl = await browserWsUrl();
+      const browser = await deps.createBrowserConnection(wsUrl);
+      let targetId: string;
+      try {
+        try {
+          // createTarget at about:blank, then navigate via the page
+          // connection. Guarantees our Network domain is enabled BEFORE the
+          // real page's requests fire — otherwise the agent could observe
+          // a snapshot of a half-loaded page when waitForNetworkIdle reports
+          // 0 in-flight only because we missed the initial requestWillBeSent
+          // burst.
+          targetId = await browser.createTarget("about:blank");
+        } catch (err) {
+          browser.close();
+          throw err;
+        }
+        try {
+          return await withPageConnection(targetId, async (page) => {
+            return await withDialogHandling(page, async () => {
+              await page.navigate(url);
+              const timedOut = await page.waitForNetworkIdle();
+              if (timedOut) {
+                deps.warn("warning: network idle timed out — page may still be loading\n");
+              }
+              const snapshot = await doSnapshot(page, targetId);
+              return { targetId, snapshot };
+            });
+          });
+        } catch (err) {
+          // Roll back the leaked tab — the targetId was never returned to
+          // the caller, so they have no handle to clean it up themselves.
+          // Best-effort: a failure here would mask the original error.
+          try {
+            await browser.closeTarget(targetId);
+          } catch (closeErr) {
+            deps.warn(
+              `warning: failed to close partially-created tab ${targetId}: ${
+                closeErr instanceof Error ? closeErr.message : closeErr
+              }\n`,
+            );
+          }
+          throw err;
+        }
+      } finally {
+        browser.close();
+      }
     },
     snapshot(targetId, opts) {
       return withPageConnection(targetId, (page) => doSnapshot(page, targetId, opts));

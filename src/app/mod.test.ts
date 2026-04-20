@@ -1,5 +1,5 @@
 import { assertEquals, assertRejects } from "@std/assert";
-import type { CdpPageService } from "../cdp/mod.ts";
+import type { CdpBrowserService, CdpPageService } from "../cdp/mod.ts";
 import type { RefMap, SnapshotRequest, SnapshotResult } from "../domain/mod.ts";
 import {
   type ArtifactStore,
@@ -100,6 +100,17 @@ function stubPage(overrides: Partial<CdpPageService> = {}): CdpPageService {
   };
 }
 
+/** Minimal CdpBrowserService stub. Override individual methods as needed. */
+function stubBrowser(overrides: Partial<CdpBrowserService> = {}): CdpBrowserService {
+  return {
+    listPages: () => Promise.resolve([]),
+    createTarget: () => Promise.resolve("NEW_TARGET_ID"),
+    closeTarget: () => Promise.resolve(),
+    close: () => {},
+    ...overrides,
+  };
+}
+
 /** Default deps — all stubs. Clone and override per test. */
 function createDeps(overrides: Partial<ScraperAppDeps> = {}) {
   const refsStore = createRefsStore();
@@ -111,6 +122,7 @@ function createDeps(overrides: Partial<ScraperAppDeps> = {}) {
     readDevToolsActivePort: () => Promise.resolve({ port: 9222, wsPath: "/devtools/browser/abc" }),
     buildBrowserWsUrl: (port, wsPath) => `ws://127.0.0.1:${port}${wsPath}`,
     createPageConnection: () => Promise.resolve(stubPage()),
+    createBrowserConnection: () => Promise.resolve(stubBrowser()),
     resolveTarget: () => Promise.resolve("obj-1"),
     createSnapshotService: () => ({
       snapshot: (req) =>
@@ -219,6 +231,196 @@ Deno.test("navigate: returns snapshot when includeSnapshot set", async () => {
   const app = createScraperApp(deps);
   const result = await app.navigate("t1", "https://example.com", { includeSnapshot: true });
   assertEquals(result.snapshot, snapshotResult);
+});
+
+// ---------------------------------------------------------------------------
+// navigateNew
+// ---------------------------------------------------------------------------
+
+Deno.test("navigateNew: opens an about:blank target then navigates the page connection", async () => {
+  let createdUrl = "";
+  let navigatedUrl = "";
+  let attached = "";
+  const browser = stubBrowser({
+    createTarget: (url) => {
+      createdUrl = url;
+      return Promise.resolve("NEW_TID");
+    },
+  });
+  const page = stubPage({
+    navigate: (url) => {
+      navigatedUrl = url;
+      return Promise.resolve();
+    },
+  });
+  const deps = createDeps({
+    createBrowserConnection: () => Promise.resolve(browser),
+    createPageConnection: (_wsUrl, targetId) => {
+      attached = targetId;
+      return Promise.resolve(page);
+    },
+  });
+  const app = createScraperApp(deps);
+  const result = await app.navigateNew("https://example.com");
+  // Open at about:blank so our Network/Page domains are attached before any
+  // real-page requests fire — see comment in app/mod.ts::navigateNew.
+  assertEquals(createdUrl, "about:blank");
+  assertEquals(attached, "NEW_TID");
+  assertEquals(navigatedUrl, "https://example.com");
+  assertEquals(result.targetId, "NEW_TID");
+});
+
+Deno.test("navigateNew: auto-snapshots and persists refs under the new targetId", async () => {
+  const deps = createDeps({
+    createBrowserConnection: () =>
+      Promise.resolve(stubBrowser({
+        createTarget: () => Promise.resolve("NEW_TID"),
+      })),
+    createPageConnection: () => Promise.resolve(stubPage()),
+  });
+  const app = createScraperApp(deps);
+  const result = await app.navigateNew("https://example.com");
+  assertEquals(deps.refsStore.data.NEW_TID, { refs: { e1: 42 }, snapshotId: "s1" });
+  // Returned snapshot is the same object the app wrote to disk.
+  assertEquals(result.snapshot.snapshotId, "s1");
+  assertEquals(result.snapshot.refs, { e1: 42 });
+});
+
+Deno.test("navigateNew: waits for network idle before snapshotting", async () => {
+  const callOrder: string[] = [];
+  const page = stubPage({
+    waitForNetworkIdle: () => {
+      callOrder.push("network-idle");
+      return Promise.resolve(false);
+    },
+  });
+  const deps = createDeps({
+    createBrowserConnection: () => Promise.resolve(stubBrowser()),
+    createPageConnection: () => Promise.resolve(page),
+    createSnapshotService: () => ({
+      snapshot: (req) => {
+        callOrder.push("snapshot");
+        return Promise.resolve({
+          yaml: "",
+          refs: {},
+          lastRefCounter: 0,
+          snapshotId: req.snapshotId,
+          title: req.title,
+          url: req.url,
+        });
+      },
+    }),
+  });
+  const app = createScraperApp(deps);
+  await app.navigateNew("https://example.com");
+  assertEquals(callOrder, ["network-idle", "snapshot"]);
+});
+
+Deno.test("navigateNew: warns on network idle timeout", async () => {
+  const warnings: string[] = [];
+  const page = stubPage({
+    waitForNetworkIdle: () => Promise.resolve(true),
+  });
+  const deps = createDeps({
+    createBrowserConnection: () => Promise.resolve(stubBrowser()),
+    createPageConnection: () => Promise.resolve(page),
+    warn: (msg) => warnings.push(msg),
+  });
+  const app = createScraperApp(deps);
+  await app.navigateNew("https://example.com");
+  assertEquals(warnings.length, 1);
+  assertEquals(warnings[0].includes("timed out"), true);
+});
+
+Deno.test("navigateNew: closes the browser connection even when createTarget throws", async () => {
+  let closed = false;
+  const browser = stubBrowser({
+    createTarget: () => Promise.reject(new Error("create failed")),
+    close: () => {
+      closed = true;
+    },
+  });
+  const deps = createDeps({
+    createBrowserConnection: () => Promise.resolve(browser),
+  });
+  const app = createScraperApp(deps);
+  await assertRejects(() => app.navigateNew("https://example.com"), Error, "create failed");
+  assertEquals(closed, true);
+});
+
+Deno.test("navigateNew: closes the leaked target if page.navigate fails", async () => {
+  const closedTargets: string[] = [];
+  const browser = stubBrowser({
+    createTarget: () => Promise.resolve("LEAKED_TID"),
+    closeTarget: (id) => {
+      closedTargets.push(id);
+      return Promise.resolve();
+    },
+  });
+  const page = stubPage({
+    navigate: () => Promise.reject(new Error("navigation blocked")),
+  });
+  const deps = createDeps({
+    createBrowserConnection: () => Promise.resolve(browser),
+    createPageConnection: () => Promise.resolve(page),
+  });
+  const app = createScraperApp(deps);
+  await assertRejects(
+    () => app.navigateNew("https://example.com"),
+    Error,
+    "navigation blocked",
+  );
+  // The targetId was never returned to the caller, so the app must roll back.
+  assertEquals(closedTargets, ["LEAKED_TID"]);
+});
+
+Deno.test("navigateNew: warns when rollback closeTarget itself fails (preserves original error)", async () => {
+  const warnings: string[] = [];
+  const browser = stubBrowser({
+    createTarget: () => Promise.resolve("LEAKED_TID"),
+    closeTarget: () => Promise.reject(new Error("target gone")),
+  });
+  const page = stubPage({
+    navigate: () => Promise.reject(new Error("navigation blocked")),
+  });
+  const deps = createDeps({
+    createBrowserConnection: () => Promise.resolve(browser),
+    createPageConnection: () => Promise.resolve(page),
+    warn: (msg) => warnings.push(msg),
+  });
+  const app = createScraperApp(deps);
+  // Original error must propagate, not the rollback error.
+  await assertRejects(
+    () => app.navigateNew("https://example.com"),
+    Error,
+    "navigation blocked",
+  );
+  assertEquals(warnings.length, 1);
+  assertEquals(warnings[0].includes("LEAKED_TID"), true);
+  assertEquals(warnings[0].includes("target gone"), true);
+});
+
+Deno.test("navigate: invalidates refs even when auto-snapshot fails", async () => {
+  const deps = createDeps({
+    createPageConnection: () => Promise.resolve(stubPage()),
+    createSnapshotService: () => ({
+      snapshot: () => Promise.reject(new Error("snapshot failed")),
+    }),
+  });
+  // Pre-existing refs from a prior page on this tab. After navigate the page
+  // context has changed; even if snapshotting fails, those refs are stale and
+  // must not be addressable.
+  deps.refsStore.data = {
+    t1: { refs: { e1: 42 }, snapshotId: "s0" },
+    other: { refs: { e9: 1 }, snapshotId: "s0" },
+  };
+  const app = createScraperApp(deps);
+  await assertRejects(
+    () => app.navigate("t1", "https://example.com", { includeSnapshot: true }),
+    Error,
+    "snapshot failed",
+  );
+  assertEquals(deps.refsStore.data, { other: { refs: { e9: 1 }, snapshotId: "s0" } });
 });
 
 // ---------------------------------------------------------------------------

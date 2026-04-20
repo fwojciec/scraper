@@ -46,7 +46,7 @@ Commands:
 `;
 
 /** Flags that never take a value argument. */
-const BOOLEAN_FLAGS = new Set(["snapshot", "full-page"]);
+const BOOLEAN_FLAGS = new Set(["snapshot", "full-page", "new"]);
 
 function parseFlags(
   args: string[],
@@ -138,7 +138,11 @@ async function handleNavigate(args: string[], deps: CliDeps): Promise<number> {
   const { positional, flags } = parseFlags(args);
   const url = positional[0];
   if (!url) {
-    deps.stderr("error: url is required\nUsage: scraper navigate --tab <targetId> <url>\n");
+    deps.stderr(
+      "error: url is required\n" +
+        "Usage: scraper navigate --tab <targetId> <url>\n" +
+        "       scraper navigate --new <url>\n",
+    );
     return 1;
   }
 
@@ -147,22 +151,59 @@ async function handleNavigate(args: string[], deps: CliDeps): Promise<number> {
     return 1;
   }
 
+  if ("snapshot" in flags) {
+    // Pre-Tier-B, `--snapshot` was an opt-in that switched stdout to YAML.
+    // Navigate now always auto-snapshots and emits the one-line pointer, so
+    // the flag is a source of confusion rather than a no-op: fail loudly.
+    deps.stderr(
+      "error: --snapshot is no longer needed — navigate always auto-snapshots\n",
+    );
+    return 1;
+  }
+
+  const isNew = "new" in flags;
+  const hasTab = "tab" in flags;
+  if (isNew && hasTab) {
+    deps.stderr("error: --tab and --new are mutually exclusive\n");
+    return 1;
+  }
+  if (!isNew && !hasTab) {
+    // Defer to canonicalizeTab so the missing-flag wording stays in one place.
+    const [, tabErr] = await resolveTabFlag(flags, deps);
+    deps.stderr(`error: ${tabErr ?? "--tab or --new is required"}\n`);
+    return 1;
+  }
+
+  if (isNew) {
+    try {
+      const result = await deps.app.navigateNew(url);
+      // Full id first so the agent can copy a prefix to use on the next call.
+      deps.stdout(`${result.targetId}\n`);
+      deps.stdout(snapshotPointer(result.snapshot) + "\n");
+      return 0;
+    } catch (err) {
+      deps.stderr(`error: ${err instanceof Error ? err.message : err}\n`);
+      return 1;
+    }
+  }
+
   const [targetId, tabErr] = await resolveTabFlag(flags, deps);
   if (tabErr) {
     deps.stderr(`error: ${tabErr}\n`);
     return 1;
   }
 
-  const includeSnapshot = flagBoolean(flags, "snapshot");
-
   try {
-    const result = await deps.app.navigate(targetId!, url, { includeSnapshot });
-    if (result.snapshot) {
-      deps.stderr(`navigated to ${url}\n`);
-      deps.stdout(result.snapshot.yaml);
-    } else {
-      deps.stdout(`navigated to ${url}\n`);
+    // Navigate auto-snapshots per the Tier B design (§Auto-snapshot rule):
+    // page context changed, agent needs fresh refs.
+    const result = await deps.app.navigate(targetId!, url, { includeSnapshot: true });
+    if (!result.snapshot) {
+      // Defensive: app.navigate must always return a snapshot when we ask for
+      // one. If a future refactor breaks that contract, fail loudly rather
+      // than silently dropping the auto-snapshot.
+      throw new Error("navigate returned no snapshot");
     }
+    deps.stdout(`navigated · ${snapshotPointer(result.snapshot)}\n`);
     return 0;
   } catch (err) {
     deps.stderr(`error: ${err instanceof Error ? err.message : err}\n`);

@@ -5,6 +5,7 @@ import { type CliDeps, runCli, type TabInfo } from "./cli/mod.ts";
 import {
   buildBrowserWsUrl,
   canonicalizeTargetId,
+  createBrowserConnection,
   createPageConnection,
   defaultUserDataDir,
   listHttpTabs,
@@ -117,6 +118,7 @@ const app = createScraperApp({
   readDevToolsActivePort,
   buildBrowserWsUrl,
   createPageConnection,
+  createBrowserConnection,
   resolveTarget,
   createSnapshotService,
   refsStore,

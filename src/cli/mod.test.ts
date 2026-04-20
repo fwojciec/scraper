@@ -6,7 +6,29 @@ const FULL_TAB = "4AE7B2C9E1D4F0A2B8C6E1F3A5D9B7C2";
 
 function stubApp(overrides: Partial<ScraperApp> = {}): ScraperApp {
   return {
-    navigate: () => Promise.resolve({}),
+    navigate: () =>
+      Promise.resolve({
+        snapshot: {
+          yaml: "- heading",
+          refs: {},
+          lastRefCounter: 0,
+          snapshotId: "s1",
+          title: "",
+          url: "https://example.com/",
+        },
+      }),
+    navigateNew: () =>
+      Promise.resolve({
+        targetId: FULL_TAB,
+        snapshot: {
+          yaml: "- heading",
+          refs: {},
+          lastRefCounter: 0,
+          snapshotId: "s1",
+          title: "",
+          url: "about:blank",
+        },
+      }),
     snapshot: () =>
       Promise.resolve({
         yaml: "- heading",
@@ -236,16 +258,29 @@ Deno.test("--tab full id is a no-op canonicalization (same id passed through)", 
 
 // --- navigate ---
 
-Deno.test("navigate calls dep with url and prints confirmation", async () => {
+Deno.test("navigate --tab auto-snapshots and prints `navigated · snapshot ...` pointer", async () => {
   let navigatedUrl = "";
+  let includeSnapshotArg: boolean | undefined;
   const io = capture();
+  const yaml = "snapshot: s47\ntree: []\n";
+  const expectedBytes = new TextEncoder().encode(yaml).byteLength;
   const code = await runCli(
     ["navigate", "--tab", "4AE7", "https://example.com"],
     stubDeps({
       app: {
-        navigate: (_targetId, url) => {
+        navigate: (_targetId, url, opts) => {
           navigatedUrl = url;
-          return Promise.resolve({});
+          includeSnapshotArg = opts?.includeSnapshot;
+          return Promise.resolve({
+            snapshot: {
+              yaml,
+              refs: { e1: 1, e2: 2, e3: 3 },
+              lastRefCounter: 3,
+              snapshotId: "s47",
+              title: "Direct Medical Reimbursement",
+              url: "https://example.com/",
+            },
+          });
         },
       },
       stdout: io.stdout,
@@ -253,13 +288,30 @@ Deno.test("navigate calls dep with url and prints confirmation", async () => {
   );
   assertEquals(code, 0);
   assertEquals(navigatedUrl, "https://example.com");
-  assertStringIncludes(io.out, "https://example.com");
+  // Auto-snapshot: navigate must always request a snapshot from the app.
+  assertEquals(includeSnapshotArg, true);
+  assertEquals(
+    io.out,
+    `navigated · snapshot s47 · Direct Medical Reimbursement · 3 refs · ${expectedBytes}B\n`,
+  );
 });
 
-Deno.test("navigate without url returns error", async () => {
+Deno.test("navigate without url returns error listing both --tab and --new usage", async () => {
   const io = capture();
   const code = await runCli(
     ["navigate", "--tab", "4AE7"],
+    stubDeps({ stderr: io.stderr }),
+  );
+  assertEquals(code, 1);
+  assertStringIncludes(io.err, "url is required");
+  assertStringIncludes(io.err, "--tab");
+  assertStringIncludes(io.err, "--new");
+});
+
+Deno.test("navigate --new without url returns error", async () => {
+  const io = capture();
+  const code = await runCli(
+    ["navigate", "--new"],
     stubDeps({ stderr: io.stderr }),
   );
   assertEquals(code, 1);
@@ -279,33 +331,62 @@ Deno.test("navigate reports error from dep", async () => {
   assertStringIncludes(io.err, "chrome is not running");
 });
 
-Deno.test("navigate --snapshot outputs YAML to stdout and status to stderr", async () => {
+Deno.test("navigate --new prints full targetId then snapshot pointer line", async () => {
+  let receivedUrl = "";
   const io = capture();
+  const yaml = "snapshot: s47\ntree: []\n";
+  const expectedBytes = new TextEncoder().encode(yaml).byteLength;
   const code = await runCli(
-    ["navigate", "--tab", "4AE7", "https://example.com", "--snapshot"],
+    ["navigate", "--new", "https://example.com"],
     stubDeps({
       app: {
-        navigate: (_targetId, _url, opts) => {
-          assertEquals(opts?.includeSnapshot, true);
+        navigateNew: (url) => {
+          receivedUrl = url;
           return Promise.resolve({
+            targetId: FULL_TAB,
             snapshot: {
-              yaml: "- heading\n",
-              refs: {},
-              lastRefCounter: 0,
-              snapshotId: "s1",
-              title: "",
+              yaml,
+              refs: { e1: 1 },
+              lastRefCounter: 1,
+              snapshotId: "s47",
+              title: "Example Domain",
               url: "https://example.com/",
             },
           });
         },
       },
       stdout: io.stdout,
-      stderr: io.stderr,
     }),
   );
   assertEquals(code, 0);
-  assertStringIncludes(io.err, "navigated to https://example.com");
-  assertStringIncludes(io.out, "- heading");
+  assertEquals(receivedUrl, "https://example.com");
+  assertEquals(
+    io.out,
+    `${FULL_TAB}\nsnapshot s47 · Example Domain · 1 refs · ${expectedBytes}B\n`,
+  );
+});
+
+Deno.test("navigate --new and --tab are mutually exclusive", async () => {
+  const io = capture();
+  const code = await runCli(
+    ["navigate", "--new", "--tab", "4AE7", "https://example.com"],
+    stubDeps({ stderr: io.stderr }),
+  );
+  assertEquals(code, 1);
+  assertStringIncludes(io.err, "mutually exclusive");
+});
+
+Deno.test("navigate --new reports error from dep", async () => {
+  const io = capture();
+  const code = await runCli(
+    ["navigate", "--new", "https://example.com"],
+    stubDeps({
+      app: { navigateNew: () => Promise.reject(new Error("could not create target")) },
+      stderr: io.stderr,
+    }),
+  );
+  assertEquals(code, 1);
+  assertStringIncludes(io.err, "could not create target");
 });
 
 // --- snapshot ---
@@ -787,6 +868,17 @@ Deno.test("upload --snapshot outputs YAML", async () => {
   assertEquals(code, 0);
   assertStringIncludes(io.err, "uploaded");
   assertStringIncludes(io.out, "- textbox");
+});
+
+Deno.test("navigate rejects --snapshot with a clear migration message", async () => {
+  const io = capture();
+  const code = await runCli(
+    ["navigate", "--tab", "4AE7", "https://example.com", "--snapshot"],
+    stubDeps({ stderr: io.stderr }),
+  );
+  assertEquals(code, 1);
+  assertStringIncludes(io.err, "--snapshot is no longer needed");
+  assertStringIncludes(io.err, "auto-snapshots");
 });
 
 Deno.test("navigate rejects --on-dialog with a clear error", async () => {

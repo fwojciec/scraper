@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Slow Page</title>
+  </head>
+  <body>
+    <h1 id="status">Pending</h1>
+    <script>
+      // /delay returns "Ready" after 1500ms — well past waitForNetworkIdle's
+      // 500ms grace, so a snapshot taken before this resolves will record
+      // "Pending" and a snapshot taken after will record "Ready".
+      fetch("/delay?ms=1500&text=Ready")
+        .then((r) => r.text())
+        .then((t) => {
+          document.getElementById("status").textContent = t;
+        });
+    </script>
+  </body>
+</html>
