@@ -5,7 +5,7 @@ import type { ScraperApp } from "../domain/mod.ts";
 function stubApp(overrides: Partial<ScraperApp> = {}): ScraperApp {
   return {
     navigate: () => Promise.resolve({}),
-    snapshot: () => Promise.resolve({ yaml: "- heading", refs: {} }),
+    snapshot: () => Promise.resolve({ yaml: "- heading", refs: {}, lastRefCounter: 0 }),
     evaluate: () => Promise.resolve({ result: null }),
     screenshot: () => Promise.resolve("/tmp/shot.png"),
     pages: () => Promise.resolve([]),
@@ -137,7 +137,9 @@ Deno.test("navigate --snapshot outputs YAML to stdout and status to stderr", asy
       app: {
         navigate: (_url, opts) => {
           assertEquals(opts?.includeSnapshot, true);
-          return Promise.resolve({ snapshot: { yaml: "- heading\n", refs: {} } });
+          return Promise.resolve({
+            snapshot: { yaml: "- heading\n", refs: {}, lastRefCounter: 0 },
+          });
         },
       },
       stdout: io.stdout,
@@ -157,7 +159,7 @@ Deno.test("snapshot prints YAML", async () => {
   const code = await runCli(
     ["snapshot"],
     stubDeps({
-      app: { snapshot: () => Promise.resolve({ yaml, refs: {} }) },
+      app: { snapshot: () => Promise.resolve({ yaml, refs: {}, lastRefCounter: 0 }) },
       stdout: io.stdout,
     }),
   );
@@ -173,7 +175,7 @@ Deno.test("snapshot passes all options", async () => {
       app: {
         snapshot: (opts: Record<string, unknown>) => {
           receivedOpts = { ...opts };
-          return Promise.resolve({ yaml: "- heading", refs: {} });
+          return Promise.resolve({ yaml: "- heading", refs: {}, lastRefCounter: 0 });
         },
       },
     }),
@@ -522,7 +524,9 @@ Deno.test("upload --snapshot outputs YAML", async () => {
       app: {
         upload: (_target, _path, opts) => {
           assertEquals(opts?.includeSnapshot, true);
-          return Promise.resolve({ snapshot: { yaml: "- textbox\n", refs: {} } });
+          return Promise.resolve({
+            snapshot: { yaml: "- textbox\n", refs: {}, lastRefCounter: 0 },
+          });
         },
       },
       stdout: io.stdout,

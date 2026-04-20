@@ -24,11 +24,20 @@ export interface TargetStore {
   remove(): Promise<void>;
 }
 
-/** Refs persistence. */
+/** Per-tab refs persistence (`refs.<targetId>.json`). */
 export interface RefsStore {
-  read(): Promise<RefMap | null>;
-  write(refs: RefMap): Promise<void>;
-  remove(): Promise<void>;
+  read(targetId: string): Promise<RefMap | null>;
+  write(targetId: string, refs: RefMap): Promise<void>;
+  remove(targetId: string): Promise<void>;
+}
+
+/**
+ * Session-scoped monotonic counter store (`counter-refs`). Reads return 0 when
+ * the file does not yet exist so callers can treat the first snapshot uniformly.
+ */
+export interface CounterStore {
+  read(): Promise<number>;
+  write(value: number): Promise<void>;
 }
 
 /** Dependencies for the scraper application layer. */
@@ -51,6 +60,7 @@ export interface ScraperAppDeps {
   // State persistence
   targetStore: TargetStore;
   refsStore: RefsStore;
+  refCounterStore: CounterStore;
 
   // Warning output
   warn(msg: string): void;
@@ -79,7 +89,7 @@ export function createScraperApp(deps: ScraperAppDeps): ScraperApp {
 
   /** Page-level connection: requires a previously selected target. */
   async function withPageConnection<T>(
-    fn: (page: CdpPageService) => Promise<T>,
+    fn: (page: CdpPageService, targetId: string) => Promise<T>,
   ): Promise<T> {
     const targetId = await deps.targetStore.read();
     if (!targetId) {
@@ -94,12 +104,12 @@ export function createScraperApp(deps: ScraperAppDeps): ScraperApp {
       // next command can re-select instead of failing with the same error.
       if (err instanceof Error && err.message.includes("target no longer exists")) {
         await deps.targetStore.remove();
-        await deps.refsStore.remove();
+        await deps.refsStore.remove(targetId);
       }
       throw err;
     }
     try {
-      return await fn(page);
+      return await fn(page, targetId);
     } finally {
       page.close();
     }
@@ -117,15 +127,28 @@ export function createScraperApp(deps: ScraperAppDeps): ScraperApp {
     });
   }
 
-  /** Run snapshot pipeline and persist refs. */
+  /** Run snapshot pipeline and persist refs + monotonic counter. */
   async function doSnapshot(
     page: CdpPageService,
+    targetId: string,
     opts?: { maxDepth?: number; maxNodes?: number; selector?: string },
   ) {
     const snapshotSvc = snapshotServiceFor(page);
-    const result = await snapshotSvc.snapshot(opts ?? {});
+    const startingRefCounter = await deps.refCounterStore.read();
+    const result = await snapshotSvc.snapshot({
+      ...(opts ?? {}),
+      startingRefCounter,
+    });
+    if (result.lastRefCounter !== startingRefCounter) {
+      await deps.refCounterStore.write(result.lastRefCounter);
+    }
+    // Always overwrite per the design: `refs.<targetId>.json` is overwritten
+    // by that tab's next snapshot. A snapshot that mints no refs must still
+    // clear any prior refs for this tab so stale handles cannot resolve.
     if (Object.keys(result.refs).length > 0) {
-      await deps.refsStore.write(result.refs);
+      await deps.refsStore.write(targetId, result.refs);
+    } else {
+      await deps.refsStore.remove(targetId);
     }
     return result;
   }
@@ -133,6 +156,7 @@ export function createScraperApp(deps: ScraperAppDeps): ScraperApp {
   /** Execute post-action pipeline: network idle wait + optional snapshot. */
   async function postAction(
     page: CdpPageService,
+    targetId: string,
     opts?: ActionOptions,
   ): Promise<ActionResult> {
     const timedOut = await page.waitForNetworkIdle();
@@ -140,7 +164,7 @@ export function createScraperApp(deps: ScraperAppDeps): ScraperApp {
       deps.warn("warning: network idle timed out — page may still be loading\n");
     }
     if (opts?.includeSnapshot) {
-      const snapshot = await doSnapshot(page);
+      const snapshot = await doSnapshot(page, targetId);
       return { snapshot };
     }
     return {};
@@ -198,29 +222,30 @@ export function createScraperApp(deps: ScraperAppDeps): ScraperApp {
         throw new Error(`no page with id '${pageId}'`);
       }
       await deps.targetStore.write(pageId);
-      await deps.refsStore.remove();
     });
   }
 
   return {
     navigate(url: string, opts?: ActionOptions) {
-      return withPageConnection(async (page) => {
+      return withPageConnection(async (page, targetId) => {
         return await withDialogHandling(page, async () => {
           await page.navigate(url);
           if (opts?.includeSnapshot) {
-            return await postAction(page, opts);
+            return await postAction(page, targetId, opts);
           }
           const timedOut = await page.waitForNetworkIdle();
           if (timedOut) {
             deps.warn("warning: network idle timed out — page may still be loading\n");
           }
-          await deps.refsStore.remove();
+          // Page context changed — invalidate this tab's refs. The monotonic
+          // cross-tab counter is preserved so refs never reuse an ID.
+          await deps.refsStore.remove(targetId);
           return {};
         });
       });
     },
     snapshot(opts) {
-      return withPageConnection((page) => doSnapshot(page, opts));
+      return withPageConnection((page, targetId) => doSnapshot(page, targetId, opts));
     },
     evaluate(expression: string) {
       return withPageConnection((page) => page.evaluate(expression));
@@ -231,20 +256,20 @@ export function createScraperApp(deps: ScraperAppDeps): ScraperApp {
     pages: listPages,
     selectPage,
     upload(target: ElementTarget, filePath: string, opts?: ActionOptions) {
-      return withPageConnection(async (page) => {
-        const refs = await deps.refsStore.read();
+      return withPageConnection(async (page, targetId) => {
+        const refs = await deps.refsStore.read(targetId);
         const objectId = await deps.resolveTarget(target, page, refs);
         return await withDialogHandling(page, async () => {
           await page.uploadFile(objectId, filePath);
-          return await postAction(page, opts);
+          return await postAction(page, targetId, opts);
         });
       });
     },
     wait(request: WaitRequest) {
-      return withPageConnection(async (page) => {
+      return withPageConnection(async (page, targetId) => {
         switch (request.kind) {
           case "textInElement": {
-            const refs = await deps.refsStore.read();
+            const refs = await deps.refsStore.read(targetId);
             const objectId = await deps.resolveTarget(request.target, page, refs);
             await page.waitForTextInElement(objectId, request.text, request.timeoutMs);
             break;

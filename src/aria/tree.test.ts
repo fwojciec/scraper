@@ -480,6 +480,42 @@ Deno.test("refs map to backendDOMNodeIds", () => {
   ];
   const result = transform(nodes);
   assertEquals(result.refs, { e1: 42, e2: 87 });
+  assertEquals(result.lastRefCounter, 2);
+});
+
+Deno.test("refs respect startRefCounter (monotonic across sessions)", () => {
+  const nodes: AccessibilityNode[] = [
+    ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2", "3"] }),
+    ax({
+      nodeId: "2",
+      role: { type: "role", value: "link" },
+      name: { type: "contents", value: "A" },
+      backendDOMNodeId: 42,
+    }),
+    ax({
+      nodeId: "3",
+      role: { type: "role", value: "button" },
+      name: { type: "contents", value: "B" },
+      backendDOMNodeId: 87,
+    }),
+  ];
+  const result = transformAXTree(nodes, { startRefCounter: 14 });
+  assertEquals(result.refs, { e15: 42, e16: 87 });
+  assertEquals(result.lastRefCounter, 16);
+});
+
+Deno.test("lastRefCounter equals startRefCounter when nothing is minted", () => {
+  const nodes: AccessibilityNode[] = [
+    ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
+    ax({
+      nodeId: "2",
+      role: { type: "role", value: "paragraph" },
+      name: { type: "contents", value: "Hello" },
+    }),
+  ];
+  const result = transformAXTree(nodes, { startRefCounter: 7 });
+  assertEquals(result.refs, {});
+  assertEquals(result.lastRefCounter, 7);
 });
 
 // --- Depth and node limits ---

@@ -17,11 +17,15 @@ export interface AriaNode {
 export interface TreeOptions {
   maxDepth?: number;
   maxNodes?: number;
+  /** Starting value for the ref counter. First minted ref is `e{startRefCounter+1}`. */
+  startRefCounter?: number;
 }
 
 export interface TransformResult {
   nodes: AriaNode[];
   refs: RefMap;
+  /** Highest ref counter value used by this transform. */
+  lastRefCounter: number;
 }
 
 const TRANSPARENT_ROLES = new Set([
@@ -169,7 +173,10 @@ export function transformAXTree(
   options?: TreeOptions,
   rootNodeId?: string,
 ): TransformResult {
-  if (axNodes.length === 0) return { nodes: [], refs: {} };
+  const startRefCounter = options?.startRefCounter ?? 0;
+  if (axNodes.length === 0) {
+    return { nodes: [], refs: {}, lastRefCounter: startRefCounter };
+  }
 
   // Build lookup: nodeId → AccessibilityNode
   const lookup = new Map<string, AccessibilityNode>();
@@ -179,16 +186,16 @@ export function transformAXTree(
 
   // Find starting node
   const root = rootNodeId ? lookup.get(rootNodeId) : axNodes[0];
-  if (!root) return { nodes: [], refs: {} };
+  if (!root) return { nodes: [], refs: {}, lastRefCounter: startRefCounter };
 
   const refs: RefMap = {};
   const ctx: BuildContext = {
-    refCounter: 0,
+    refCounter: startRefCounter,
     nodeCount: 0,
     maxNodes: options?.maxNodes ?? Infinity,
   };
   const maxDepth = options?.maxDepth ?? Infinity;
 
   const nodes = transformNode(root, 0, maxDepth, ctx, refs, lookup);
-  return { nodes, refs };
+  return { nodes, refs, lastRefCounter: ctx.refCounter };
 }

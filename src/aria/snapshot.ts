@@ -14,6 +14,7 @@ export interface SnapshotDeps {
 export function createSnapshotService(deps: SnapshotDeps): SnapshotService {
   return {
     async snapshot(options) {
+      const startingRefCounter = options.startingRefCounter ?? 0;
       const axNodes = await deps.getFullAXTree();
 
       let rootNodeId: string | undefined;
@@ -21,16 +22,17 @@ export function createSnapshotService(deps: SnapshotDeps): SnapshotService {
       if (options.selector) {
         const backendNodeId = await deps.resolveSelector(options.selector);
         const match = axNodes.find((n) => n.backendDOMNodeId === backendNodeId);
-        if (!match) return { yaml: "", refs: {} };
+        if (!match) return { yaml: "", refs: {}, lastRefCounter: startingRefCounter };
         rootNodeId = match.nodeId;
       }
 
-      const { nodes, refs } = transformAXTree(axNodes, {
+      const { nodes, refs, lastRefCounter } = transformAXTree(axNodes, {
         maxDepth: options.maxDepth,
         maxNodes: options.maxNodes,
+        startRefCounter: startingRefCounter,
       }, rootNodeId);
 
-      return { yaml: renderYaml(nodes), refs };
+      return { yaml: renderYaml(nodes), refs, lastRefCounter };
     },
   };
 }

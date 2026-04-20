@@ -58,6 +58,40 @@ Deno.test("snapshot returns empty YAML for empty tree", async () => {
   const result = await svc.snapshot({});
   assertEquals(result.yaml, "");
   assertEquals(result.refs, {});
+  assertEquals(result.lastRefCounter, 0);
+});
+
+Deno.test("snapshot: starts ref minting at startingRefCounter + 1", async () => {
+  const axNodes: AccessibilityNode[] = [
+    ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2", "3"] }),
+    ax({
+      nodeId: "2",
+      role: { type: "role", value: "link" },
+      name: { type: "contents", value: "A" },
+      backendDOMNodeId: 10,
+    }),
+    ax({
+      nodeId: "3",
+      role: { type: "role", value: "button" },
+      name: { type: "contents", value: "B" },
+      backendDOMNodeId: 20,
+    }),
+  ];
+  const svc = createSnapshotService(mockDeps(axNodes));
+  const result = await svc.snapshot({ startingRefCounter: 14 });
+  assertEquals(result.refs, { e15: 10, e16: 20 });
+  assertEquals(result.lastRefCounter, 16);
+  assertStringIncludes(result.yaml, "[ref=e15]");
+  assertStringIncludes(result.yaml, "[ref=e16]");
+});
+
+Deno.test("snapshot: lastRefCounter equals startingRefCounter when nothing is minted", async () => {
+  const svc = createSnapshotService(mockDeps([], {
+    resolveSelector: () => Promise.resolve(999),
+  }));
+  const result = await svc.snapshot({ selector: "#nope", startingRefCounter: 42 });
+  assertEquals(result.lastRefCounter, 42);
+  assertEquals(result.refs, {});
 });
 
 Deno.test("snapshot uses selector to scope subtree", async () => {

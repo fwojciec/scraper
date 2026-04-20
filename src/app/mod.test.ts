@@ -1,7 +1,13 @@
 import { assertEquals, assertRejects } from "@std/assert";
 import type { CdpBrowserService, CdpPageService } from "../cdp/mod.ts";
 import type { PageInfo, RefMap, SnapshotResult } from "../domain/mod.ts";
-import { createScraperApp, type RefsStore, type ScraperAppDeps, type TargetStore } from "./mod.ts";
+import {
+  type CounterStore,
+  createScraperApp,
+  type RefsStore,
+  type ScraperAppDeps,
+  type TargetStore,
+} from "./mod.ts";
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -25,18 +31,38 @@ function createTargetStore(initial?: string | null): TargetStore & { data: strin
   return s;
 }
 
-function createRefsStore(initial?: RefMap | null): RefsStore & { data: RefMap | null } {
+function createRefsStore(
+  initial?: Record<string, RefMap> | null,
+): RefsStore & { data: Record<string, RefMap> } {
   const s = {
-    data: initial ?? null,
-    read() {
-      return Promise.resolve(s.data);
+    data: { ...(initial ?? {}) } as Record<string, RefMap>,
+    read(targetId: string) {
+      return Promise.resolve(s.data[targetId] ?? null);
     },
-    write(r: RefMap) {
-      s.data = r;
+    write(targetId: string, r: RefMap) {
+      s.data[targetId] = r;
       return Promise.resolve();
     },
-    remove() {
-      s.data = null;
+    remove(targetId: string) {
+      delete s.data[targetId];
+      return Promise.resolve();
+    },
+  };
+  return s;
+}
+
+function createCounterStore(
+  initial?: number,
+): CounterStore & { value: number; writes: number[] } {
+  const s = {
+    value: initial ?? 0,
+    writes: [] as number[],
+    read() {
+      return Promise.resolve(s.value);
+    },
+    write(n: number) {
+      s.value = n;
+      s.writes.push(n);
       return Promise.resolve();
     },
   };
@@ -78,7 +104,8 @@ function stubBrowser(
 /** Default deps — all stubs. Clone and override per test. */
 function createDeps(overrides: Partial<ScraperAppDeps> = {}) {
   const targetStore = createTargetStore(null);
-  const refsStore = createRefsStore(null);
+  const refsStore = createRefsStore();
+  const refCounterStore = createCounterStore(0);
   const base: ScraperAppDeps = {
     userDataDir: "/default/chrome-data",
     readDevToolsActivePort: () => Promise.resolve({ port: 9222, wsPath: "/devtools/browser/abc" }),
@@ -87,14 +114,20 @@ function createDeps(overrides: Partial<ScraperAppDeps> = {}) {
     createPageConnection: () => Promise.resolve(stubPage()),
     resolveTarget: () => Promise.resolve("obj-1"),
     createSnapshotService: () => ({
-      snapshot: () => Promise.resolve({ yaml: "- text: hello\n", refs: { e1: 42 } }),
+      snapshot: (opts) =>
+        Promise.resolve({
+          yaml: "- text: hello\n",
+          refs: { [`e${(opts.startingRefCounter ?? 0) + 1}`]: 42 },
+          lastRefCounter: (opts.startingRefCounter ?? 0) + 1,
+        }),
     }),
     targetStore,
     refsStore,
+    refCounterStore,
     warn: () => {},
     ...overrides,
   };
-  return { ...base, targetStore, refsStore };
+  return { ...base, targetStore, refsStore, refCounterStore };
 }
 
 // ---------------------------------------------------------------------------
@@ -140,7 +173,7 @@ Deno.test("pages: works with no target selected", async () => {
 // selectPage
 // ---------------------------------------------------------------------------
 
-Deno.test("selectPage: persists targetId and clears refs", async () => {
+Deno.test("selectPage: persists targetId and preserves per-tab refs", async () => {
   const deps = createDeps({
     createBrowserConnection: () =>
       Promise.resolve(
@@ -153,11 +186,13 @@ Deno.test("selectPage: persists targetId and clears refs", async () => {
         }),
       ),
   });
-  deps.refsStore.data = { e1: 42 };
+  // Existing per-tab refs survive a selectPage — they are only invalidated by
+  // that tab's next snapshot or navigate.
+  deps.refsStore.data = { t1: { e1: 42 }, t2: { e5: 99 } };
   const app = createScraperApp(deps);
   await app.selectPage("t2");
   assertEquals(deps.targetStore.data, "t2");
-  assertEquals(deps.refsStore.data, null);
+  assertEquals(deps.refsStore.data, { t1: { e1: 42 }, t2: { e5: 99 } });
 });
 
 Deno.test("selectPage: throws for unknown page", async () => {
@@ -220,19 +255,23 @@ Deno.test("navigate: warns on network idle timeout", async () => {
   assertEquals(warnings[0].includes("timed out"), true);
 });
 
-Deno.test("navigate: removes refs after navigation without snapshot", async () => {
+Deno.test("navigate: removes refs for the current tab only", async () => {
   const deps = createDeps({
     createPageConnection: () => Promise.resolve(stubPage()),
   });
   deps.targetStore.data = "t1";
-  deps.refsStore.data = { e1: 42 };
+  deps.refsStore.data = { t1: { e1: 42 }, t2: { e3: 17 } };
   const app = createScraperApp(deps);
   await app.navigate("https://example.com");
-  assertEquals(deps.refsStore.data, null);
+  assertEquals(deps.refsStore.data, { t2: { e3: 17 } });
 });
 
 Deno.test("navigate: returns snapshot when includeSnapshot set", async () => {
-  const snapshotResult: SnapshotResult = { yaml: "- text: hi\n", refs: { e1: 1 } };
+  const snapshotResult: SnapshotResult = {
+    yaml: "- text: hi\n",
+    refs: { e1: 1 },
+    lastRefCounter: 1,
+  };
   const deps = createDeps({
     createPageConnection: () => Promise.resolve(stubPage()),
     createSnapshotService: () => ({
@@ -249,7 +288,7 @@ Deno.test("navigate: returns snapshot when includeSnapshot set", async () => {
 // snapshot
 // ---------------------------------------------------------------------------
 
-Deno.test("snapshot: returns YAML and persists refs", async () => {
+Deno.test("snapshot: returns YAML and persists refs under the current tab", async () => {
   const deps = createDeps({
     createPageConnection: () => Promise.resolve(stubPage()),
   });
@@ -257,7 +296,96 @@ Deno.test("snapshot: returns YAML and persists refs", async () => {
   const app = createScraperApp(deps);
   const result = await app.snapshot({});
   assertEquals(result.yaml, "- text: hello\n");
-  assertEquals(deps.refsStore.data, { e1: 42 });
+  assertEquals(deps.refsStore.data, { t1: { e1: 42 } });
+});
+
+Deno.test("snapshot: threads monotonic counter across consecutive snapshots", async () => {
+  const deps = createDeps({
+    createPageConnection: () => Promise.resolve(stubPage()),
+  });
+  deps.targetStore.data = "t1";
+  const app = createScraperApp(deps);
+  const first = await app.snapshot({});
+  assertEquals(first.refs, { e1: 42 });
+  assertEquals(deps.refCounterStore.value, 1);
+  const second = await app.snapshot({});
+  assertEquals(second.refs, { e2: 42 });
+  assertEquals(deps.refCounterStore.value, 2);
+  assertEquals(deps.refsStore.data, { t1: { e2: 42 } });
+});
+
+Deno.test("snapshot: counter survives across tabs so tab B starts after tab A's max", async () => {
+  const deps = createDeps({
+    createPageConnection: () => Promise.resolve(stubPage()),
+    createSnapshotService: () => ({
+      snapshot: (opts) => {
+        const start = opts.startingRefCounter ?? 0;
+        const refs: RefMap = {};
+        const count = 3;
+        for (let i = 1; i <= count; i++) refs[`e${start + i}`] = 100 + i;
+        return Promise.resolve({
+          yaml: `- generated ${count} refs\n`,
+          refs,
+          lastRefCounter: start + count,
+        });
+      },
+    }),
+  });
+
+  const app = createScraperApp(deps);
+  deps.targetStore.data = "tabA";
+  await app.snapshot({});
+  assertEquals(deps.refsStore.data, { tabA: { e1: 101, e2: 102, e3: 103 } });
+  assertEquals(deps.refCounterStore.value, 3);
+
+  deps.targetStore.data = "tabB";
+  await app.snapshot({});
+  assertEquals(deps.refsStore.data, {
+    tabA: { e1: 101, e2: 102, e3: 103 },
+    tabB: { e4: 101, e5: 102, e6: 103 },
+  });
+  assertEquals(deps.refCounterStore.value, 6);
+});
+
+Deno.test("snapshot: empty snapshot clears this tab's prior refs file", async () => {
+  const deps = createDeps({
+    createPageConnection: () => Promise.resolve(stubPage()),
+    createSnapshotService: () => ({
+      snapshot: (opts) =>
+        Promise.resolve({
+          yaml: "",
+          refs: {},
+          lastRefCounter: opts.startingRefCounter ?? 0,
+        }),
+    }),
+  });
+  deps.targetStore.data = "t1";
+  deps.refsStore.data = { t1: { e1: 42 }, t2: { e9: 99 } };
+  const app = createScraperApp(deps);
+  await app.snapshot({});
+  // Only t1's refs are cleared; other tabs' refs untouched.
+  assertEquals(deps.refsStore.data, { t2: { e9: 99 } });
+});
+
+Deno.test("snapshot: does not write counter when snapshot minted no refs", async () => {
+  const deps = createDeps({
+    createPageConnection: () => Promise.resolve(stubPage()),
+    createSnapshotService: () => ({
+      snapshot: (opts) =>
+        Promise.resolve({
+          yaml: "",
+          refs: {},
+          lastRefCounter: opts.startingRefCounter ?? 0,
+        }),
+    }),
+  });
+  deps.targetStore.data = "t1";
+  deps.refCounterStore.value = 7;
+  const app = createScraperApp(deps);
+  await app.snapshot({});
+  assertEquals(deps.refCounterStore.value, 7);
+  assertEquals(deps.refCounterStore.writes, []);
+  assertEquals(deps.refsStore.data, {});
 });
 
 // ---------------------------------------------------------------------------
@@ -268,6 +396,7 @@ Deno.test("upload: resolves target, uploads file, runs post-action", async () =>
   let uploadedPath = "";
   let uploadedObjectId = "";
   let resolvedTarget: unknown;
+  let resolveRefsArg: RefMap | null | undefined;
   const page = stubPage({
     uploadFile: (objectId, filePath) => {
       uploadedObjectId = objectId;
@@ -277,17 +406,21 @@ Deno.test("upload: resolves target, uploads file, runs post-action", async () =>
   });
   const deps = createDeps({
     createPageConnection: () => Promise.resolve(page),
-    resolveTarget: (target) => {
+    resolveTarget: (target, _page, refs) => {
       resolvedTarget = target;
+      resolveRefsArg = refs;
       return Promise.resolve("obj-1");
     },
   });
   deps.targetStore.data = "t1";
+  deps.refsStore.data = { t1: { e1: 42 }, t2: { e9: 99 } };
   const app = createScraperApp(deps);
   await app.upload({ ref: "e1" }, "/tmp/photo.jpg");
   assertEquals(uploadedObjectId, "obj-1");
   assertEquals(uploadedPath, "/tmp/photo.jpg");
   assertEquals(resolvedTarget, { ref: "e1" });
+  // Only the current tab's refs are exposed to resolveTarget.
+  assertEquals(resolveRefsArg, { e1: 42 });
 });
 
 Deno.test("upload: returns snapshot when includeSnapshot set", async () => {
@@ -419,11 +552,12 @@ Deno.test("stale target: clears target + refs when target no longer exists", asy
       Promise.reject(new Error("target no longer exists — run 'scraper pages' to pick a new tab")),
   });
   deps.targetStore.data = "dead-target";
-  deps.refsStore.data = { e1: 42 };
+  deps.refsStore.data = { "dead-target": { e1: 42 }, other: { e9: 1 } };
   const app = createScraperApp(deps);
   await assertRejects(() => app.snapshot({}), Error, "target no longer exists");
   assertEquals(deps.targetStore.data, null);
-  assertEquals(deps.refsStore.data, null);
+  // Only the dead target's refs are cleared; other tabs are preserved.
+  assertEquals(deps.refsStore.data, { other: { e9: 1 } });
 });
 
 Deno.test("stale target: other errors don't clear state", async () => {
@@ -431,11 +565,11 @@ Deno.test("stale target: other errors don't clear state", async () => {
     createPageConnection: () => Promise.reject(new Error("connection refused")),
   });
   deps.targetStore.data = "some-target";
-  deps.refsStore.data = { e1: 42 };
+  deps.refsStore.data = { "some-target": { e1: 42 } };
   const app = createScraperApp(deps);
   await assertRejects(() => app.snapshot({}), Error, "connection refused");
   assertEquals(deps.targetStore.data, "some-target");
-  assertEquals(deps.refsStore.data, { e1: 42 });
+  assertEquals(deps.refsStore.data, { "some-target": { e1: 42 } });
 });
 
 Deno.test("reads DevToolsActivePort before connecting", async () => {
