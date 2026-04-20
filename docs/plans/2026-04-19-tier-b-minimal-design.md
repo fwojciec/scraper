@@ -189,9 +189,12 @@ a separate counter at `~/.scraper/counter` since they increment at different rat
 
 ### Stale ref error
 
+Error text uses the canonical full targetId (per the canonicalization invariant); the
+agent may retry with any unique prefix since input is prefix-tolerant.
+
 ```
-error: ref e3 is stale — not in refs.4AE7B2C9.json (current refs: e15..e22).
-Run `scraper snapshot --tab 4AE7B2C9` and retry with a fresh ref.
+error: ref e3 is stale — not in refs.4AE7B2C9E1D4F0A2B8C6E1F3A5D9B7C2.json (current refs: e15..e22).
+Run `scraper snapshot --tab 4AE7B2C9E1D4F0A2B8C6E1F3A5D9B7C2` and retry with a fresh ref.
 ```
 
 ### Eval context
