@@ -92,12 +92,19 @@ prefixes are accepted on input for convenience, but `scraper tabs` prints the **
 targetId for each tab to guarantee the agent can always address any tab
 unambiguously.
 
+**Canonicalization.** Every command's first step is to resolve `--tab <input>` to the
+unique full targetId by scanning `/json/list`. All subsequent file I/O (`refs.*.json`
+names, snapshot metadata) and all user-facing output (messages, pointer lines, error
+text) use the **full canonical targetId**, never the user's input. A tab has exactly
+one ref file on disk regardless of whether the agent addressed it via a 4-char prefix,
+an 8-char prefix, or the full ID — so `$ref` continuity across commands is guaranteed.
+
 | Command | Purpose | Auto-snapshot? |
 |---|---|---|
 | `scraper tabs` | List all page tabs with full targetIds, URLs, titles. No `--tab`. | No |
 | `scraper navigate --tab <id> <url>` | Navigate that tab. Waits for network idle. | **Yes** |
 | `scraper navigate --new <url>` | Create a new tab via `Target.createTarget` and print its targetId. No `--tab` (there's nothing to address). | **Yes** |
-| `scraper snapshot --tab <id>` | Capture ARIA tree + dialog state for that tab. Writes `refs.<id>.json`. | — (it *is* the snapshot) |
+| `scraper snapshot --tab <id>` | Capture ARIA tree + dialog state for that tab. Writes `refs.<canonical-targetId>.json`. | — (it *is* the snapshot) |
 | `scraper eval --tab <id> '<expr>'` | Evaluate JS in that tab's page with `$ref(id)` helper bound. | **No** |
 | `scraper wait --tab <id> ...` | Wait for selector, text, or text-in-ref in that tab. | **Yes** on success |
 | `scraper upload --tab <id> --ref e3 <path>` | `DOM.setFileInputFiles` on the element. | **No** |
@@ -350,13 +357,22 @@ snapshot-artifact rule).
 **There is no active target.** Every command that interacts with a page requires
 `--tab <targetId>`. Resolution logic is trivial:
 
-1. Parse `--tab <prefix>` from CLI.
-2. Call `/json/list`, find unique match by prefix.
-3. If zero matches: error "no tab with prefix <prefix>; run `scraper tabs` to see
+1. Parse `--tab <input>` from CLI. `<input>` may be a prefix or a full targetId.
+2. Call `/json/list`, find unique match by prefix against the set of live page
+   targets. Call the result `canonicalTargetId`.
+3. If zero matches: error "no tab with prefix `<input>`; run `scraper tabs` to see
    available tabs."
-4. If multiple matches: error "ambiguous prefix <prefix>, matches N tabs; provide
-   more characters."
-5. Otherwise attach and run.
+4. If multiple matches: error "ambiguous prefix `<input>`, matches N tabs; provide
+   more characters (full IDs are printed by `scraper tabs`)."
+5. **From this point on, every file name, snapshot metadata field, stdout pointer,
+   and error message refers to `canonicalTargetId`, not `<input>`.** Ref files live
+   at `refs.<canonicalTargetId>.json`, snapshot YAML `targetId:` is the canonical
+   form, etc.
+6. Attach and run.
+
+This invariant guarantees that if the agent calls
+`scraper snapshot --tab 4AE7B2C9` and later `scraper eval --tab 4AE7B2C9E1D4F0...`,
+both resolve to the same on-disk refs file and `$ref` continuity holds.
 
 This removes the entire "what should scraper pick on first run?" question — the
 agent always picks. The trade-off is command-line verbosity; the payoff is that
@@ -444,9 +460,12 @@ active-target resolution logic.
 
 ## Eval Plumbing
 
-When an `eval --tab <id>` expression contains `$ref("eN")` calls, the CLI:
+When an `eval --tab <input>` expression contains `$ref("eN")` calls, the CLI
+(after canonicalizing `<input>` to the full `canonicalTargetId` — see
+[Active Target Selection](#active-target-selection)):
 
-1. Reads `refs.<id>.json` for the ref-to-backendNodeId map scoped to that tab.
+1. Reads `refs.<canonicalTargetId>.json` for the ref-to-backendNodeId map scoped
+   to that tab.
 2. For each distinct ref in the expression, verifies it is present in that file
    (stale-ref check — monotonic counter means a ref not in the map was generated
    by a previous snapshot and is unambiguously stale).
