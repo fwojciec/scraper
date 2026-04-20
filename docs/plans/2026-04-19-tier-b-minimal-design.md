@@ -21,30 +21,56 @@ component system. Agents spent cycles rediscovering the fallback each session.
 
 ## Thesis
 
-LLMs are superhuman at manipulating text APIs — writing JS against the DOM, composing
-CSS queries, dispatching events. They are not good at pixel-reasoning or mouse aiming.
-The right primitive for an LLM browser tool is therefore **accessibility-tree
-observation + arbitrary JS evaluation**, not pre-wrapped "click this coordinate" or
-"fill this input" commands.
+**"Here is the browser. Use it."** No magic, no hidden state, no clever abstractions
+papering over what's actually happening. The tool exposes the smallest set of
+primitives needed to let a text-native LLM drive a real Chrome tab, and then stays
+out of the way.
 
-Browser-harness takes the opposite position — screenshots + pixel clicks — because it
-targets vision-capable agents. Our target is CLI-invoked Claude Code operating on real
-user Chrome instances. Text-first, not pixel-first.
+LLMs are superhuman at manipulating text APIs — writing JS against the DOM,
+composing CSS queries, dispatching events. They are not good at pixel-reasoning or
+mouse aiming. The right primitive for an LLM browser tool is therefore
+**accessibility-tree observation + arbitrary JS evaluation**, not pre-wrapped
+"click this coordinate" or "fill this input" commands.
+
+Browser-harness takes the opposite position — screenshots + pixel clicks — because
+it targets vision-capable agents. Our target is CLI-invoked Claude Code operating on
+real user Chrome instances. Text-first, not pixel-first.
+
+### Design rules derived from the thesis
+
+1. **No hidden state.** Everything the CLI does is fully described by its
+   arguments. No "active tab" to fall out of sync with. No implicit "last
+   snapshot." Agent passes what it wants to act on.
+2. **No magic target discovery.** Scraper does not guess which tab you mean.
+   The agent calls `scraper tabs`, picks one, and passes the targetId.
+3. **No semantic-action wrapping.** There is no `click` command that hides
+   whether Chrome received a real mouse event or a JS `.click()`. Agent writes
+   the JS it wants.
+4. **Minimum primitives.** If a capability can be expressed by composing the
+   existing commands, we do not add a new command for it. Helpers come later,
+   only on evidence of real repetition.
+5. **Artifacts on disk, pointers on stdout.** Snapshots and screenshots are
+   files the agent can `Read` on demand; token cost is opt-in.
 
 ## Scope
 
 **In:** A thin CLI over Chrome DevTools Protocol with:
 
 - Attach-only to the user's running Chrome (no owned launch mode)
-- A single persisted active-target pointer (one `targetId` in `refs.json`), switched
-  only by explicit `scraper tab <ref>`
+- **Stateless tab selection**: every command that needs a tab takes `--tab <targetId>`
+  as a required argument. No persisted active-target; the agent supplies the target on
+  every call
+- `scraper tabs` as the bootstrap listing command (no state required)
 - ARIA snapshots written to disk, returned as pointers
+- Per-tab element ref state (`refs.<targetId>.json`), invalidated on each tab's next
+  snapshot, session-wide monotonic ref counter
 - Arbitrary JS evaluation against snapshot-identified elements
 - File upload (CDP `DOM.setFileInputFiles` — the one thing JS can't do)
-- Selector/text waits, screenshots, tab switching, explicit new-tab opening
+- Selector/text waits, screenshots, explicit new-tab opening
 
 **Out:** Owned Chrome launch, headless mode, stop command, multi-mode Chrome state
 (`OwnedState`/`AttachedState` union, ownership classification, PID tracking),
+**persisted active-target pointer** (stateless instead — see [Active Target Selection](#active-target-selection)),
 semantic action commands (`click`/`fill`/`type`/`select`/`submit`/`press-key`),
 per-action `DialogPolicy` plumbing, self-healing helper files, form-helper stdlib
 (deferred until observed repetition justifies it), frames/iframes, shadow DOM, drag
@@ -52,15 +78,19 @@ and drop, network interception, cookie manipulation.
 
 ## Command Surface (7 commands)
 
+Every command below except `tabs` requires `--tab <targetId>`. `targetId` is Chrome's
+CDP target identifier; the agent learns them from `scraper tabs` output. Unique
+prefixes are accepted (Docker-style), so an 8-character prefix is typically enough.
+
 | Command | Purpose | Auto-snapshot? |
 |---|---|---|
-| `scraper navigate <url>` | Navigate active tab. `--new` opens a new tab via `Target.createTarget` and makes it active. Waits for network idle. | **Yes** |
-| `scraper snapshot` | Capture ARIA tree + tabs + dialog state. | — (it *is* the snapshot) |
-| `scraper eval '<expr>'` | Evaluate JS in the page with `$ref(id)` helper bound. | **No** |
-| `scraper wait ...` | Wait for selector, text, or text-in-ref. | **Yes** on success |
-| `scraper tab <ref>` | Activate a tab by its ref; becomes the active target. | **Yes** |
-| `scraper upload --ref e3 <path>` | `DOM.setFileInputFiles` on the element. | **No** |
-| `scraper screenshot` | Capture a PNG of the viewport. | No — returns image path |
+| `scraper tabs` | List all page tabs with truncated target IDs, URLs, titles. No `--tab`. | No |
+| `scraper navigate --tab <id> <url>` | Navigate that tab. `--new <url>` (no `--tab`) creates a new tab via `Target.createTarget` and prints its targetId. Waits for network idle. | **Yes** |
+| `scraper snapshot --tab <id>` | Capture ARIA tree + dialog state for that tab. Writes `refs.<id>.json`. | — (it *is* the snapshot) |
+| `scraper eval --tab <id> '<expr>'` | Evaluate JS in that tab's page with `$ref(id)` helper bound. | **No** |
+| `scraper wait --tab <id> ...` | Wait for selector, text, or text-in-ref in that tab. | **Yes** on success |
+| `scraper upload --tab <id> --ref e3 <path>` | `DOM.setFileInputFiles` on the element. | **No** |
+| `scraper screenshot --tab <id>` | Capture a PNG of that tab's viewport. | No — returns image path |
 
 ### Auto-snapshot rule (asymmetric)
 
@@ -79,51 +109,68 @@ one line — the agent reads the full file only when it needs the tree.
 Example:
 
 ```
-$ scraper navigate https://memberforms.uhc.com/DirectMedicalReimbursement.html
+$ scraper tabs
+4AE7B2C9  https://memberforms.uhc.com/...   "Direct Medical Reimbursement"
+9F3BA1C2  https://mail.google.com/...        "Inbox"
+
+$ scraper navigate --tab 4AE7B2C9 https://memberforms.uhc.com/DirectMedicalReimbursement.html
 navigated · snapshot s47 · "Direct Medical Reimbursement" · 14 refs · 8421B
 
-$ scraper eval 'document.title'
+$ scraper eval --tab 4AE7B2C9 'document.title'
 "Direct Medical Reimbursement"
 
-$ scraper eval '$ref("e8").click()'
+$ scraper eval --tab 4AE7B2C9 '$ref("e8").click()'
 undefined
 
-$ scraper snapshot
+$ scraper snapshot --tab 4AE7B2C9
 snapshot s48 · step 2 visible · 22 refs · 11240B
 ```
 
 ### Deleted commands
 
-`start`, `stop`, `pages`, `page <id>`, `click`, `fill`, `type`, `select`, `submit`,
+`start`, `stop`, `pages`, `page <id>`, `tab <ref>` (as a switch-verb — replaced by
+passing `--tab <id>` explicitly), `click`, `fill`, `type`, `select`, `submit`,
 `press-key`. `start` becomes implicit (first command attaches). Everything else is
 subsumed by `eval` or removed.
 
 ## Handle Scheme
 
-Element refs are opaque short strings (`e1`, `e14`, `e47`). Tab refs use a `t` prefix
-(`t1`, `t2`). Both are backed by CDP `backendNodeId` (elements) or `targetId` (tabs),
-persisted in `refs.json`, resolved inside `eval` via a single injected helper:
+### Tabs — no refs, use targetIds directly
+
+Tabs are identified by Chrome's CDP `targetId` (32-hex-char strings). No short-ref
+aliasing, no `t1`/`t2` mapping file to maintain. `scraper tabs` prints the truncated
+first-8-char prefix for readability; the CLI accepts any unique prefix when parsing
+`--tab <id>`. Docker-style: short on display, prefix-tolerant on input.
+
+### Elements — short monotonic refs, per-tab state
+
+Element refs are opaque short strings (`e1`, `e14`, `e47`). Backed by CDP
+`backendNodeId`, persisted in `~/.scraper/refs.<targetId>.json`, resolved inside
+`eval` via a single injected helper:
 
 ```js
-$ref("e8")  // → Element, or throws "stale ref" if not in current refs.json
+$ref("e8")  // → Element, or throws "stale ref" if not in this tab's current refs file
 ```
 
-### Monotonic counter (session-scoped)
+### Monotonic counter (session-scoped, cross-tab)
 
-The counter that generates ref names **never resets within a Chrome session**.
-Snapshot `s47` might assign `e1..e14`; the next snapshot `s49` starts at `e15`, never
-reuses `e3`. This matters because `refs.json` holds only the latest snapshot's
-subset — a stale ref is one not present in current `refs.json`, and monotonic numbering
-guarantees a stale ref never silently binds to a different node.
+The counter that generates element-ref names **never resets within a Chrome session
+and is shared across tabs**. If tab A's snapshot assigns `e1..e14`, tab B's next
+snapshot starts at `e15`. No `e3` ever appears in two places. This matters because:
 
-The counter is persisted in `~/.scraper/counter-refs` (separate from the `counter`
-used for snapshot/screenshot IDs since they increment at different rates).
+- A stale ref is detected as "not present in this tab's current `refs.<targetId>.json`."
+- Since `e3` is minted exactly once across the whole session, there is no possibility
+  of it silently re-binding to a different node — either on the same tab or a different
+  one.
+
+The counter is persisted in `~/.scraper/counter-refs`. Snapshot/screenshot IDs use
+a separate counter at `~/.scraper/counter` since they increment at different rates.
 
 ### Stale ref error
 
 ```
-error: ref e3 is stale — not in current snapshot (s49, refs e15..e22).
-Run `scraper snapshot` and retry with a fresh ref.
+error: ref e3 is stale — not in refs.4AE7B2C9.json (current refs: e15..e22).
+Run `scraper snapshot --tab 4AE7B2C9` and retry with a fresh ref.
 ```
 
 ### Eval context
@@ -184,16 +231,9 @@ use `document.querySelector` in `eval` for those.
 
 ```yaml
 snapshot: s47
+targetId: 4AE7B2C9E1D4F0A2B8C6E1F3A5D9B7C2
 url: https://memberforms.uhc.com/DirectMedicalReimbursement.html
 title: Direct Medical Reimbursement
-tabs:
-  - ref: t1
-    active: true
-    url: https://memberforms.uhc.com/...
-    title: Direct Medical Reimbursement
-  - ref: t2
-    url: https://mail.google.com/...
-    title: Inbox
 dialog: null
 tree:
   - role: main
@@ -203,7 +243,10 @@ tree:
       - role: button, name: Next, ref: e8
 ```
 
-`tabs:` is always present, so the agent never needs a separate `pages` command.
+`targetId` is included so the agent (and anyone reading the file later) can tell
+which tab the snapshot came from. Tabs are not included inline here — for the list
+of open tabs, the agent calls `scraper tabs` (cheap, no snapshot write).
+
 `dialog:` surfaces any JavaScript dialog observed during the command that produced
 this snapshot (see [Dialog Handling](#dialog-handling)).
 
@@ -263,50 +306,60 @@ Available on `navigate`, `eval`, `wait`, `tab`, `upload`. No discriminated-union
 
 ```
 ~/.scraper/
-├── counter          # monotonic int for snapshot/screenshot IDs
-├── counter-refs     # monotonic int for e/t ref IDs (session-scoped)
-├── refs.json        # { activeTargetId, snapshotId, refs: { e3: backendId, t1: targetId, ... } }
-├── s{N}.yaml        # snapshot artifacts
-└── shot{N}.png      # screenshot artifacts
+├── counter                       # monotonic int for snapshot/screenshot IDs
+├── counter-refs                  # monotonic int for element-ref IDs (session-scoped, cross-tab)
+├── refs.<targetId>.json          # latest element refs for that tab (overwritten per snapshot)
+├── s{N}.yaml                     # snapshot artifacts
+└── shot{N}.png                   # screenshot artifacts
 ```
 
-### refs.json shape
+### refs.<targetId>.json shape
 
 ```json
 {
-  "activeTargetId": "B2E7C1A4...",
   "snapshotId": "s47",
   "refs": {
-    "e3":  { "kind": "element", "backendNodeId": 1234 },
-    "e8":  { "kind": "element", "backendNodeId": 1287 },
-    "t1":  { "kind": "tab", "targetId": "B2E7C1A4..." },
-    "t2":  { "kind": "tab", "targetId": "D9F3A8E1..." }
+    "e3": 1234,
+    "e8": 1287
   }
 }
 ```
 
-Overwritten on every snapshot. `activeTargetId` is *scraper's* notion of the active
-tab — **not** derived from Chrome's focused window. The user can switch tabs in
-Chrome manually without redirecting automation. Switching the scraper's active
-target requires explicit `scraper tab <ref>` (or `scraper navigate --new <url>`,
-which creates a new tab and makes it active).
+Maps element ref names to CDP `backendNodeId`. Overwritten on every snapshot of the
+same tab. Not shared across tabs — each tab has its own file. Dead tabs' leftover
+files get cleaned up opportunistically on `scraper tabs` (when we can see which
+targetIds no longer exist) or by age (anything older than 24h, matching the
+snapshot-artifact rule).
 
-### Active-target resolution (three cases)
+### Active Target Selection
 
-Every command resolves the active target before running:
+**There is no active target.** Every command that interacts with a page requires
+`--tab <targetId>`. Resolution logic is trivial:
 
-1. **`refs.json` exists and `activeTargetId` points to a live tab** → attach to it.
-2. **`refs.json` exists but `activeTargetId` points to a closed tab** → CDP
-   `Target.attachToTarget` fails; fall back to the first `type: "page"` entry in
-   `/json/list`, overwrite `activeTargetId` in `refs.json`, continue.
-3. **`refs.json` does not exist (first run, fresh session)** → same fallback: pick
-   the first `type: "page"` entry from `/json/list`, write a minimal `refs.json`
-   with just `{ activeTargetId, snapshotId: null, refs: {} }`, continue. If there
-   are no page targets at all (empty Chrome? headless with no tabs?) error with
-   a clear "no tabs open; run `scraper navigate --new <url>`" message.
+1. Parse `--tab <prefix>` from CLI.
+2. Call `/json/list`, find unique match by prefix.
+3. If zero matches: error "no tab with prefix <prefix>; run `scraper tabs` to see
+   available tabs."
+4. If multiple matches: error "ambiguous prefix <prefix>, matches N tabs; provide
+   more characters."
+5. Otherwise attach and run.
 
-Case 3 means the user never needs an explicit init step — any command Just Works
-against whatever tab Chrome has in front.
+This removes the entire "what should scraper pick on first run?" question — the
+agent always picks. The trade-off is command-line verbosity; the payoff is that
+there is literally no state to go stale and no heuristic to be wrong about.
+
+**Bootstrap flow (two paths):**
+
+- `scraper tabs` → see what's open → pick a prefix → use it on subsequent commands.
+- `scraper navigate --new <url>` → creates a new tab, prints its full targetId on
+  stdout, agent copies the prefix.
+
+Commands that need a tab error clearly if `--tab` is missing:
+
+```
+error: --tab <targetId> is required. Run `scraper tabs` to list tabs,
+or `scraper navigate --new <url>` to open a new one.
+```
 
 **Gone:**
 
@@ -315,27 +368,28 @@ against whatever tab Chrome has in front.
 - `StateStore`, `ChromeState`, `OwnedState`/`AttachedState` union, ownership
   classification, `isProcessAlive`, `isOurChromeProcess`, dead-PID recovery,
   foreign-PID handling
+- **`activeTargetId` and all three-case resolution logic** (replaced by explicit
+  `--tab` on every command)
 
 **Attach behavior on every command:**
 
 Each invocation reads `DevToolsActivePort` from the default Chrome user data
-directory, connects to the `activeTargetId` from `refs.json` (with the closed-tab
-fallback above), runs the command, closes the connection. No persistent attachment
-state beyond the active-target bookkeeping. First-time users get a clear error
-message pointing them at `chrome://inspect/#remote-debugging` if remote debugging
-is off.
+directory, connects to the `--tab <targetId>` Chrome target, runs the command,
+closes the connection. No persistent attachment state. First-time users get a
+clear error message pointing them at `chrome://inspect/#remote-debugging` if remote
+debugging is off.
 
 Channel selection (`--channel beta|canary|dev`) stays as an environment variable or
 flag, but without the `attached` vs `owned` branching it's a thin lookup.
 
 ## Wait Semantics
 
-Three kinds, unified behind one command (unchanged from current):
+Three kinds, unified behind one command:
 
 ```
-scraper wait --selector "#submit"           # CSS selector appears
-scraper wait --text "Thank you"             # text appears anywhere
-scraper wait --ref e8 --text "Loaded"       # text appears within ref
+scraper wait --tab <id> --selector "#submit"           # CSS selector appears
+scraper wait --tab <id> --text "Thank you"             # text appears anywhere
+scraper wait --tab <id> --ref e8 --text "Loaded"       # text appears within ref
 ```
 
 All wait kinds auto-snapshot on success. Failure throws with a clear timeout message.
@@ -359,24 +413,27 @@ Large deletions from the current codebase:
 
 Preserved / modified:
 
-- `src/aria/` — snapshot pipeline stays, YAML shape gains `tabs:`, `dialog:`, `url:`,
-  `title:` header
+- `src/aria/` — snapshot pipeline stays, YAML shape gains `targetId:`, `dialog:`,
+  `url:`, `title:` header. Widens ref coverage to the full WAI-ARIA widget category.
 - `src/cdp/attach.ts` — reused, but caller becomes "every command" not "just start"
-- `src/cdp/connection.ts`, `src/cdp/network.ts`, `src/cdp/dialog.ts` — preserved
+- `src/cdp/connection.ts` — preserved; `listPages` becomes the backing call for the
+  new `scraper tabs` command
+- `src/cdp/network.ts`, `src/cdp/dialog.ts` — preserved
 - `src/cdp/input.ts` — trimmed heavily (upload stays, rest goes)
 - `src/cdp/resolve.ts` — becomes ref-only; selector branch goes
 - `src/cdp/accessibility.ts` — preserved
-- `src/main.ts` — shrinks to roughly half its current size
+- `src/main.ts` — shrinks substantially; no ownership bookkeeping, no state store
+  wiring, no active-target resolution
 
-Rough estimate: **~40% fewer lines** of code, single state mode, zero process
-lifecycle management.
+Rough estimate: **~40% fewer lines** of code, zero persistent ownership state, no
+active-target resolution logic.
 
 ## Eval Plumbing
 
-When an eval expression contains `$ref("eN")` calls, the CLI:
+When an `eval --tab <id>` expression contains `$ref("eN")` calls, the CLI:
 
-1. Reads `refs.json` for the current ref-to-backendNodeId map.
-2. For each distinct ref in the expression, verifies it is present in `refs.json`
+1. Reads `refs.<id>.json` for the ref-to-backendNodeId map scoped to that tab.
+2. For each distinct ref in the expression, verifies it is present in that file
    (stale-ref check — monotonic counter means a ref not in the map was generated
    by a previous snapshot and is unambiguously stale).
 3. Resolves each `backendNodeId` to a live `objectId` via CDP `DOM.resolveNode`.
@@ -391,7 +448,7 @@ If the expression uses no `$ref`, the CLI skips the resolution step and just run
 
 `eval` returns only the JSON-serialized result of the expression. It does **not**
 auto-snapshot (see [Auto-snapshot rule](#auto-snapshot-rule-asymmetric)) — the agent
-calls `scraper snapshot` explicitly after evals that mutate the DOM.
+calls `scraper snapshot --tab <id>` explicitly after evals that mutate the DOM.
 
 ## Documentation
 
@@ -399,8 +456,9 @@ Ship a `SKILL.md` at the repo root that teaches Claude Code when and how to use 
 tool. Key content:
 
 - Attach semantics ("make sure Chrome is running with remote debugging")
-- The 7 commands, one line each
-- The `$ref` convention and the auto-snapshot feedback loop
+- The 7 commands, one line each, with `--tab <id>` shown as required
+- Standard opening move: `scraper tabs` to list, pick a prefix, then operate
+- The `$ref` convention and the asymmetric auto-snapshot rule
 - Explicit note: "prefer `eval` with the React setter dance over looking for a
   semantic action — there isn't one"
 - Pattern library for the most common forms of JS (set value + dispatch events,
@@ -425,12 +483,18 @@ dance repeatedly across unrelated forms.
 ## Success Criteria
 
 The UHC form in `/Users/filip/Desktop/Invoices/CLAUDE.md` can be filled and submitted
-end-to-end using only: `navigate`, `snapshot`, `eval`, `wait`, `upload`. The agent
-does not need to reach for an external MCP (chrome-devtools-mcp, browser-use, etc.)
-at any point, and does not get stuck on "this tool doesn't work for this field type,
-try a different one" — because there is no type-sensitive semantic-action layer to
-get stuck on. Writing raw JS (including the React-setter dance) is the primitive,
-not a fallback.
+end-to-end using only: `tabs`, `navigate`, `snapshot`, `eval`, `wait`, `upload`. The
+agent does not need to reach for an external MCP (chrome-devtools-mcp, browser-use,
+etc.) at any point, and does not get stuck on "this tool doesn't work for this field
+type, try a different one" — because there is no type-sensitive semantic-action
+layer to get stuck on. Writing raw JS (including the React-setter dance) is the
+primitive, not a fallback.
 
-Total CLI command count: 7 (from 15). Code size: ~40% reduction. State: one store
-for refs + active target, two monotonic counters, no process-lifecycle bookkeeping.
+The user can continue browsing freely in Chrome (opening tabs, reading, typing)
+while Claude is driving a specific tab — because Claude always addresses its tab by
+explicit targetId, and there is no "active tab" state that could shift out from
+under either party.
+
+Total CLI command count: 7 (from 15). Code size: ~40% reduction. State: per-tab
+refs files + two monotonic counters. No process-lifecycle bookkeeping, no active
+target, no three-case resolution.
