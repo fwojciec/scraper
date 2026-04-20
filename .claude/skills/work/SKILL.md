@@ -59,39 +59,25 @@ deno task ci
 git add .
 ```
 
-Run `roborev review` exactly once — each invocation is a paid review. **NEVER re-run to "retry".**
+Invoke the `codex-review` skill (Skill tool, skill=`codex-review`). It blocks, runs a Codex
+review of the working tree, and prints findings verbatim. Each review is a paid Codex call —
+**never re-run on an unchanged tree** and cap at **2 paid reviews per issue**.
 
-### Step 1: Submit
-
-```bash
-roborev review --dirty
-```
-
-This prints a job ID and returns immediately. Note the job ID.
-
-### Step 2: Wait for results
-
-Poll until the job finishes (usually 30-90 seconds):
-
-```bash
-roborev status
-```
-
-When status shows the job is complete, read findings:
-
-```bash
-roborev show <job-id>
-```
-
-If `roborev show` says "no review found", the job is still running — wait and re-check status.
-
-### Step 3: Act on findings
+### Act on findings
 
 - **No findings**: proceed to Phase 4.
-- **Has findings**: exercise judgment — fix findings you agree with at any severity, skip ones you
-  don't. You have better context than a separate fix agent. Re-validate with `deno task ci`, then
-  re-review once more (max 2 paid reviews per issue). After the 2nd review: fix what you agree with,
-  proceed — no further reviews.
+- **Has findings**: invoke the `superpowers:receiving-code-review` skill (Skill tool,
+  skill=`superpowers:receiving-code-review`). Verify each finding against the code before acting,
+  and push back with technical reasoning when a finding is wrong. Do not reflexively fix every
+  finding — external reviewers lack full context and some findings will be wrong.
+- After fixes, re-validate with `deno task ci` and re-review once more (max 2 paid reviews per
+  issue). After the 2nd review: apply what you still agree with, proceed — no further reviews.
+
+### Stuck?
+
+If implementation blocks on a non-trivial bug or design question, delegate to the
+`codex:codex-rescue` subagent (Agent tool, subagent_type=`codex:codex-rescue`) rather than
+spinning. Rescue is not a replacement for review — use it only when actually blocked.
 
 ---
 
@@ -126,7 +112,7 @@ Closes #<number>
 
 ## Test Plan
 - [ ] `deno task ci` passes
-- [ ] roborev review passed
+- [ ] Codex review passed
 
 Generated with [Claude Code](https://claude.com/claude-code)
 EOF
