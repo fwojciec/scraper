@@ -29,7 +29,7 @@ Deno.test("translates role and name AXValues", () => {
   assertEquals(result[0].name, { type: "contents", value: "Submit" });
 });
 
-Deno.test("strips extra CDP fields from AXValue (relatedNodes, sources)", () => {
+Deno.test("strips relatedNodes and source extras but preserves source types + contributed", () => {
   const raw = [
     {
       nodeId: "3",
@@ -41,15 +41,36 @@ Deno.test("strips extra CDP fields from AXValue (relatedNodes, sources)", () => 
         sources: [{ type: "attribute", attribute: "role" }],
       },
       name: {
-        type: "contents",
+        type: "computedString",
         value: "Home",
-        sources: [{ type: "contents" }],
+        sources: [
+          { type: "relatedElement" }, // no value → placeholder
+          {
+            type: "contents",
+            value: { type: "computedString", value: "Home" },
+          },
+          { type: "attribute", superseded: true },
+          { type: "attribute", invalid: true },
+        ],
       },
     },
   ];
   const result = translateAXNodes(raw);
-  assertEquals(result[0].role, { type: "role", value: "link" });
-  assertEquals(result[0].name, { type: "contents", value: "Home" });
+  assertEquals(result[0].role, {
+    type: "role",
+    value: "link",
+    sources: [{ type: "attribute" }],
+  });
+  assertEquals(result[0].name, {
+    type: "computedString",
+    value: "Home",
+    sources: [
+      { type: "relatedElement" },
+      { type: "contents", contributed: true },
+      { type: "attribute", superseded: true },
+      { type: "attribute", invalid: true },
+    ],
+  });
 });
 
 Deno.test("translates properties array, stripping extra AXValue fields", () => {
@@ -75,7 +96,7 @@ Deno.test("translates properties array, stripping extra AXValue fields", () => {
   ];
   const result = translateAXNodes(raw);
   assertEquals(result[0].properties, [
-    { name: "level", value: { type: "integer", value: 2 } },
+    { name: "level", value: { type: "integer", value: 2, sources: [{ type: "attribute" }] } },
     { name: "checked", value: { type: "tristate", value: "true" } },
   ]);
 });

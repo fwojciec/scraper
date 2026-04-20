@@ -41,15 +41,58 @@ const INTERACTABLE_ROLES = new Set([
   "link",
   "button",
   "textbox",
+  "searchbox",
+  "textarea",
   "checkbox",
   "radio",
+  "switch",
   "combobox",
+  "listbox",
+  "option",
+  "menuitem",
+  "menuitemcheckbox",
+  "menuitemradio",
+  "slider",
+  "spinbutton",
+  "tab",
+  "treeitem",
+  "gridcell",
+  "row",
+  "columnheader",
+  "rowheader",
 ]);
 
 interface BuildContext {
   refCounter: number;
   nodeCount: number;
   maxNodes: number;
+}
+
+/**
+ * Decide whether an accessible name came from an explicit author-provided
+ * source (ARIA attribute, related element, placeholder) vs. being absorbed
+ * from descendant text content.
+ *
+ * CDP's `AXValue.type` is an AXValueType (almost always `"computedString"`
+ * for names), so the source lives inside `AXValue.sources[]`. When sources
+ * are absent (synthetic unit-test fixtures), fall back to the legacy
+ * heuristic of treating `type !== "contents"` as explicit.
+ */
+function hasExplicitNameSource(name: AccessibilityValue | undefined): boolean {
+  if (!name) return false;
+  if (!name.sources || name.sources.length === 0) {
+    return name.type !== "contents";
+  }
+  // Real CDP sources include placeholder entries (no value) listing every
+  // location CDP looked — only `contributed` sources actually produced the
+  // name, so restrict to those.
+  return name.sources.some(
+    (s) =>
+      s.contributed === true &&
+      !s.superseded &&
+      !s.invalid &&
+      (s.type === "attribute" || s.type === "relatedElement" || s.type === "placeholder"),
+  );
 }
 
 function transformNode(
@@ -96,17 +139,19 @@ function transformNode(
     node.level = levelProp.value.value as number;
   }
 
-  // Ref for interactable elements (only if we can resolve them)
-  if (INTERACTABLE_ROLES.has(role) && ax.backendDOMNodeId !== undefined) {
+  // Name
+  const rawName = ax.name?.value;
+  const nameValue = rawName != null && rawName !== "" ? String(rawName) : undefined;
+  const nameIsExplicit = nameValue !== undefined && hasExplicitNameSource(ax.name);
+
+  // Ref for widget-category roles, plus any node with an explicit accessible name
+  // (only when we can resolve them to a backend DOM node).
+  const shouldMintRef = INTERACTABLE_ROLES.has(role) || nameIsExplicit;
+  if (shouldMintRef && ax.backendDOMNodeId !== undefined) {
     ctx.refCounter++;
     node.ref = `e${ctx.refCounter}`;
     refs[node.ref] = ax.backendDOMNodeId;
   }
-
-  // Name
-  const rawName = ax.name?.value;
-  const nameValue = rawName != null && rawName !== "" ? String(rawName) : undefined;
-  const nameIsExplicit = nameValue !== undefined && ax.name?.type !== "contents";
 
   // Process children if within depth limit
   if (depth < maxDepth) {

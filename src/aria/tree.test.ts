@@ -432,6 +432,316 @@ Deno.test("radio gets ref", () => {
   assertStringIncludes(yaml, `radio [ref=e1]`);
 });
 
+// --- Widened widget-category coverage ---
+
+Deno.test("spinbutton gets ref", () => {
+  const nodes: AccessibilityNode[] = [
+    ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
+    ax({
+      nodeId: "2",
+      role: { type: "role", value: "spinbutton" },
+      backendDOMNodeId: 40,
+    }),
+  ];
+  const yaml = snapshot(nodes);
+  assertStringIncludes(yaml, `spinbutton [ref=e1]`);
+});
+
+Deno.test("slider gets ref", () => {
+  const nodes: AccessibilityNode[] = [
+    ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
+    ax({
+      nodeId: "2",
+      role: { type: "role", value: "slider" },
+      backendDOMNodeId: 41,
+    }),
+  ];
+  const yaml = snapshot(nodes);
+  assertStringIncludes(yaml, `slider [ref=e1]`);
+});
+
+Deno.test("switch gets ref", () => {
+  const nodes: AccessibilityNode[] = [
+    ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
+    ax({
+      nodeId: "2",
+      role: { type: "role", value: "switch" },
+      backendDOMNodeId: 42,
+    }),
+  ];
+  const yaml = snapshot(nodes);
+  assertStringIncludes(yaml, `switch [ref=e1]`);
+});
+
+Deno.test("searchbox gets ref", () => {
+  const nodes: AccessibilityNode[] = [
+    ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
+    ax({
+      nodeId: "2",
+      role: { type: "role", value: "searchbox" },
+      backendDOMNodeId: 43,
+    }),
+  ];
+  const yaml = snapshot(nodes);
+  assertStringIncludes(yaml, `searchbox [ref=e1]`);
+});
+
+Deno.test("textarea gets ref", () => {
+  const nodes: AccessibilityNode[] = [
+    ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
+    ax({
+      nodeId: "2",
+      role: { type: "role", value: "textarea" },
+      backendDOMNodeId: 44,
+    }),
+  ];
+  const yaml = snapshot(nodes);
+  assertStringIncludes(yaml, `textarea [ref=e1]`);
+});
+
+Deno.test("tab gets ref", () => {
+  const nodes: AccessibilityNode[] = [
+    ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
+    ax({
+      nodeId: "2",
+      role: { type: "role", value: "tab" },
+      name: { type: "contents", value: "Details" },
+      backendDOMNodeId: 45,
+    }),
+  ];
+  const yaml = snapshot(nodes);
+  assertStringIncludes(yaml, `tab "Details" [ref=e1]`);
+});
+
+Deno.test("menuitem gets ref", () => {
+  const nodes: AccessibilityNode[] = [
+    ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
+    ax({
+      nodeId: "2",
+      role: { type: "role", value: "menuitem" },
+      name: { type: "contents", value: "Save" },
+      backendDOMNodeId: 46,
+    }),
+  ];
+  const yaml = snapshot(nodes);
+  assertStringIncludes(yaml, `menuitem "Save" [ref=e1]`);
+});
+
+Deno.test("option gets ref", () => {
+  const nodes: AccessibilityNode[] = [
+    ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
+    ax({
+      nodeId: "2",
+      role: { type: "role", value: "option" },
+      name: { type: "contents", value: "One" },
+      backendDOMNodeId: 47,
+    }),
+  ];
+  const yaml = snapshot(nodes);
+  assertStringIncludes(yaml, `option "One" [ref=e1]`);
+});
+
+Deno.test("treeitem gets ref", () => {
+  const nodes: AccessibilityNode[] = [
+    ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
+    ax({
+      nodeId: "2",
+      role: { type: "role", value: "treeitem" },
+      name: { type: "contents", value: "Node" },
+      backendDOMNodeId: 48,
+    }),
+  ];
+  const yaml = snapshot(nodes);
+  assertStringIncludes(yaml, `treeitem "Node" [ref=e1]`);
+});
+
+Deno.test("gridcell gets ref", () => {
+  const nodes: AccessibilityNode[] = [
+    ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
+    ax({
+      nodeId: "2",
+      role: { type: "role", value: "gridcell" },
+      name: { type: "contents", value: "A1" },
+      backendDOMNodeId: 49,
+    }),
+  ];
+  const yaml = snapshot(nodes);
+  assertStringIncludes(yaml, `gridcell "A1" [ref=e1]`);
+});
+
+// --- Named non-widget pass ---
+
+Deno.test("named landmark (main[aria-label]) gets ref", () => {
+  const nodes: AccessibilityNode[] = [
+    ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
+    ax({
+      nodeId: "2",
+      role: { type: "role", value: "main" },
+      name: { type: "attribute", value: "Form" },
+      backendDOMNodeId: 77,
+    }),
+  ];
+  const result = transform(nodes);
+  assertEquals(result.refs, { e1: 77 });
+  const yaml = renderYaml(result.nodes);
+  assertStringIncludes(yaml, `main "Form" [ref=e1]`);
+});
+
+Deno.test("unnamed non-widget node gets no ref", () => {
+  const nodes: AccessibilityNode[] = [
+    ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
+    ax({
+      nodeId: "2",
+      role: { type: "role", value: "main" },
+      backendDOMNodeId: 78,
+      childIds: ["3"],
+    }),
+    ax({
+      nodeId: "3",
+      role: { type: "role", value: "paragraph" },
+      name: { type: "contents", value: "Hi" },
+    }),
+  ];
+  const result = transform(nodes);
+  assertEquals(result.refs, {});
+  const yaml = renderYaml(result.nodes);
+  assert(!yaml.includes("ref="));
+});
+
+Deno.test("paragraph with contents-derived name gets no ref", () => {
+  // contents-typed names (derived from children) don't count as explicit.
+  const nodes: AccessibilityNode[] = [
+    ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
+    ax({
+      nodeId: "2",
+      role: { type: "role", value: "paragraph" },
+      name: { type: "contents", value: "Hello" },
+      backendDOMNodeId: 79,
+    }),
+  ];
+  const result = transform(nodes);
+  assertEquals(result.refs, {});
+});
+
+// --- Realistic CDP shape (name.type="computedString", source in name.sources) ---
+
+Deno.test("CDP shape: computedString name with contributing attribute source → ref minted", () => {
+  const nodes: AccessibilityNode[] = [
+    ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
+    ax({
+      nodeId: "2",
+      role: { type: "role", value: "main" },
+      name: {
+        type: "computedString",
+        value: "Form",
+        sources: [
+          { type: "relatedElement" },
+          { type: "attribute", contributed: true },
+          { type: "contents" },
+        ],
+      },
+      backendDOMNodeId: 101,
+    }),
+  ];
+  const result = transform(nodes);
+  assertEquals(result.refs, { e1: 101 });
+});
+
+Deno.test("CDP shape: computedString name with contributing contents source → no ref", () => {
+  // Regression guard: real CDP sets name.type=computedString for every named
+  // node, and sources lists every location CDP looked (including unused
+  // attribute/relatedElement slots). The only winning source here is contents.
+  const nodes: AccessibilityNode[] = [
+    ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
+    ax({
+      nodeId: "2",
+      role: { type: "role", value: "heading" },
+      name: {
+        type: "computedString",
+        value: "Top Bestselling Books",
+        sources: [
+          { type: "relatedElement" },
+          { type: "attribute" },
+          { type: "contents", contributed: true },
+          { type: "attribute", superseded: true },
+        ],
+      },
+      backendDOMNodeId: 102,
+    }),
+  ];
+  const result = transform(nodes);
+  assertEquals(result.refs, {});
+});
+
+Deno.test("CDP shape: non-contributing attribute source (placeholder entry) → no ref", () => {
+  // CDP's sources array often lists attribute/relatedElement slots that CDP
+  // looked at and found nothing for (no `value`). Those must not mint refs.
+  const nodes: AccessibilityNode[] = [
+    ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
+    ax({
+      nodeId: "2",
+      role: { type: "role", value: "cell" },
+      name: {
+        type: "computedString",
+        value: "Frank Herbert",
+        sources: [
+          { type: "relatedElement" },
+          { type: "attribute" },
+          { type: "contents", contributed: true },
+          { type: "attribute", superseded: true },
+        ],
+      },
+      backendDOMNodeId: 103,
+    }),
+  ];
+  const result = transform(nodes, undefined, "1");
+  // cell isn't in the widget-role set, so no ref.
+  assertEquals(result.refs, {});
+});
+
+Deno.test("CDP shape: superseded contributing attribute source doesn't count", () => {
+  const nodes: AccessibilityNode[] = [
+    ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
+    ax({
+      nodeId: "2",
+      role: { type: "role", value: "paragraph" },
+      name: {
+        type: "computedString",
+        value: "Text",
+        sources: [
+          { type: "contents", contributed: true },
+          { type: "attribute", contributed: true, superseded: true },
+        ],
+      },
+      backendDOMNodeId: 104,
+    }),
+  ];
+  const result = transform(nodes);
+  assertEquals(result.refs, {});
+});
+
+Deno.test("CDP shape: relatedElement (aria-labelledby) contributing → ref minted", () => {
+  const nodes: AccessibilityNode[] = [
+    ax({ nodeId: "1", role: { type: "role", value: "RootWebArea" }, childIds: ["2"] }),
+    ax({
+      nodeId: "2",
+      role: { type: "role", value: "region" },
+      name: {
+        type: "computedString",
+        value: "Sidebar",
+        sources: [
+          { type: "relatedElement", contributed: true },
+          { type: "attribute" },
+          { type: "contents" },
+        ],
+      },
+      backendDOMNodeId: 105,
+    }),
+  ];
+  const result = transform(nodes);
+  assertEquals(result.refs, { e1: 105 });
+});
+
 // --- Refs ---
 
 Deno.test("refs increment sequentially", () => {

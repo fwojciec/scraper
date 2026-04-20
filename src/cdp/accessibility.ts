@@ -9,6 +9,20 @@ type RawNode = Record<string, any>;
 function translateValue(raw: RawNode): AccessibilityValue {
   const out: AccessibilityValue = { type: raw.type };
   if (raw.value !== undefined) out.value = raw.value;
+  if (Array.isArray(raw.sources)) {
+    out.sources = raw.sources.map((s: RawNode) => {
+      const src: {
+        type: string;
+        superseded?: boolean;
+        invalid?: boolean;
+        contributed?: boolean;
+      } = { type: s.type };
+      if (s.superseded === true) src.superseded = true;
+      if (s.invalid === true) src.invalid = true;
+      if (s.value !== undefined) src.contributed = true;
+      return src;
+    });
+  }
   return out;
 }
 
