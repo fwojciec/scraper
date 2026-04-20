@@ -6,13 +6,7 @@ export interface ActionResult {
   snapshot?: SnapshotResult;
 }
 
-/** How a mutating action should handle a dialog if one appears. */
-export type DialogPolicy =
-  | { action: "accept"; text?: string }
-  | { action: "dismiss" };
-
 /** Options common to all mutating actions. */
 export interface ActionOptions {
   includeSnapshot?: boolean;
-  onDialog?: DialogPolicy;
 }

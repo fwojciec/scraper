@@ -66,7 +66,6 @@ Deno.test("CLI: no chrome.json is ever written", async () => {
   const rt = await startTestRuntime();
   try {
     // Run a variety of commands
-    await runScraper(["pages"], rt.env);
     await runScraper(["navigate", "about:blank"], rt.env);
     await runScraper(["snapshot"], rt.env);
 

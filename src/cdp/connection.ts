@@ -21,20 +21,6 @@ export interface CdpPageService {
   resolveRef(backendNodeId: number, refName: string): Promise<string>;
   /** Resolve CSS selector to a RemoteObjectId. Error on 0 or >1 matches. */
   resolveUniqueSelector(selector: string): Promise<string>;
-  /** Click element at the given RemoteObjectId using real pointer events. */
-  clickElement(objectId: string): Promise<void>;
-  /** Fill an input element: focus, clear, set value, dispatch input+change. */
-  fillElement(objectId: string, value: string): Promise<void>;
-  /** Type text character by character: focus, then dispatch key events. */
-  typeText(objectId: string, text: string): Promise<void>;
-  /** Select a dropdown option: set value and dispatch input+change. */
-  selectOption(objectId: string, value: string): Promise<void>;
-  /** Submit the form containing the element (or the element itself if it's a form). */
-  submitForm(objectId: string): Promise<void>;
-  /** Focus the element. */
-  focusElement(objectId: string): Promise<void>;
-  /** Press a keyboard key (dispatched to the focused element). */
-  pressKey(key: string): Promise<void>;
   /** Upload a file to an input[type=file] element. */
   uploadFile(objectId: string, filePath: string): Promise<void>;
   /** Register handler for dialog events. Returns cleanup function. */
@@ -328,13 +314,6 @@ export async function createPageConnection(
     resolveSelector,
     resolveRef,
     resolveUniqueSelector,
-    clickElement: input.clickElement,
-    fillElement: input.fillElement,
-    typeText: input.typeText,
-    selectOption: input.selectOption,
-    submitForm: input.submitForm,
-    focusElement: input.focusElement,
-    pressKey: input.pressKey,
     uploadFile: input.uploadFile,
     onDialog: dialog.onDialog,
     handleDialog: dialog.handleDialog,

@@ -21,16 +21,6 @@ export interface ScraperApp {
   snapshot(options: SnapshotOptions): Promise<SnapshotResult>;
   evaluate(expression: string): Promise<EvalResult>;
   screenshot(fullPage?: boolean): Promise<string>;
-  click(target: ElementTarget, options?: ActionOptions): Promise<ActionResult>;
-  fill(target: ElementTarget, value: string, options?: ActionOptions): Promise<ActionResult>;
-  type(target: ElementTarget, text: string, options?: ActionOptions): Promise<ActionResult>;
-  selectOption(
-    target: ElementTarget,
-    value: string,
-    options?: ActionOptions,
-  ): Promise<ActionResult>;
-  submit(target: ElementTarget, options?: ActionOptions): Promise<ActionResult>;
-  pressKey(key: string, target?: ElementTarget, options?: ActionOptions): Promise<ActionResult>;
   upload(target: ElementTarget, filePath: string, options?: ActionOptions): Promise<ActionResult>;
   wait(request: WaitRequest): Promise<void>;
 }

@@ -36,9 +36,32 @@ export interface TestRuntime {
   targetId: string;
 }
 
+/** Discover the initial page target by polling Chrome's /json/list. */
+async function discoverPageTarget(port: number): Promise<string> {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/json/list`);
+      if (res.ok) {
+        const targets = await res.json();
+        // deno-lint-ignore no-explicit-any
+        const pageTarget = targets.find((t: any) => t.type === "page");
+        if (pageTarget) return pageTarget.id;
+      } else {
+        await res.body?.cancel();
+      }
+    } catch { /* transport failure, retry */ }
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  throw new Error("no page target found");
+}
+
 /**
- * Launch a test Chrome, point scraper at it, and select the initial page.
- * Every scraper command is a separate process that attaches via DevToolsActivePort.
+ * Launch a test Chrome, point scraper at it, and seed the target file
+ * with the initial page so subsequent commands have a target.
+ *
+ * Tier B will replace the persisted target with stateless `--tab` addressing
+ * (#40, #43); until then this helper writes the target file directly because
+ * the `pages`/`page` CLI commands have been removed.
  */
 export async function startTestRuntime(): Promise<TestRuntime> {
   const tmpHome = await Deno.makeTempDir();
@@ -49,23 +72,14 @@ export async function startTestRuntime(): Promise<TestRuntime> {
     DENO_DIR: await denoDir(),
     SCRAPER_USER_DATA_DIR: chrome.userDataDir,
   };
-  // Select the initial about:blank page so subsequent commands have a target.
-  const pages = await runScraper(["pages"], env);
-  if (pages.code !== 0) {
+  let targetId: string;
+  try {
+    targetId = await discoverPageTarget(chrome.port);
+    await Deno.mkdir(`${tmpHome}/.scraper`, { recursive: true });
+    await Deno.writeTextFile(`${tmpHome}/.scraper/target`, targetId);
+  } catch (err) {
     await stopTestRuntime({ chrome, tmpHome, env, targetId: "" });
-    throw new Error(`pages failed during setup: ${pages.stderr}`);
-  }
-  // pages output is "  <targetId>  <title>  <url>"; first non-empty column is targetId.
-  const firstLine = pages.stdout.split("\n").find((l) => l.trim().length > 0);
-  if (!firstLine) {
-    await stopTestRuntime({ chrome, tmpHome, env, targetId: "" });
-    throw new Error(`no pages listed in test Chrome: ${pages.stdout}`);
-  }
-  const targetId = firstLine.replace(/^\*?\s*/, "").split(/\s+/)[0];
-  const page = await runScraper(["page", targetId], env);
-  if (page.code !== 0) {
-    await stopTestRuntime({ chrome, tmpHome, env, targetId });
-    throw new Error(`page failed during setup: ${page.stderr}`);
+    throw err;
   }
   return { env, chrome, tmpHome, targetId };
 }

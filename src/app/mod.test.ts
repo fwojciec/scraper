@@ -53,13 +53,6 @@ function stubPage(overrides: Partial<CdpPageService> = {}): CdpPageService {
     resolveSelector: () => Promise.resolve(0),
     resolveRef: () => Promise.resolve("obj-1"),
     resolveUniqueSelector: () => Promise.resolve("obj-1"),
-    clickElement: () => Promise.resolve(),
-    fillElement: () => Promise.resolve(),
-    typeText: () => Promise.resolve(),
-    selectOption: () => Promise.resolve(),
-    submitForm: () => Promise.resolve(),
-    focusElement: () => Promise.resolve(),
-    pressKey: () => Promise.resolve(),
     uploadFile: () => Promise.resolve(),
     onDialog: () => () => {},
     handleDialog: () => Promise.resolve(),
@@ -268,15 +261,17 @@ Deno.test("snapshot: returns YAML and persists refs", async () => {
 });
 
 // ---------------------------------------------------------------------------
-// click (representative action)
+// upload (representative action)
 // ---------------------------------------------------------------------------
 
-Deno.test("click: resolves target, clicks, runs post-action", async () => {
-  let clicked = false;
+Deno.test("upload: resolves target, uploads file, runs post-action", async () => {
+  let uploadedPath = "";
+  let uploadedObjectId = "";
   let resolvedTarget: unknown;
   const page = stubPage({
-    clickElement: () => {
-      clicked = true;
+    uploadFile: (objectId, filePath) => {
+      uploadedObjectId = objectId;
+      uploadedPath = filePath;
       return Promise.resolve();
     },
   });
@@ -289,19 +284,52 @@ Deno.test("click: resolves target, clicks, runs post-action", async () => {
   });
   deps.targetStore.data = "t1";
   const app = createScraperApp(deps);
-  await app.click({ ref: "e1" });
-  assertEquals(clicked, true);
+  await app.upload({ ref: "e1" }, "/tmp/photo.jpg");
+  assertEquals(uploadedObjectId, "obj-1");
+  assertEquals(uploadedPath, "/tmp/photo.jpg");
   assertEquals(resolvedTarget, { ref: "e1" });
 });
 
-Deno.test("click: returns snapshot when includeSnapshot set", async () => {
+Deno.test("upload: returns snapshot when includeSnapshot set", async () => {
   const deps = createDeps({
     createPageConnection: () => Promise.resolve(stubPage()),
   });
   deps.targetStore.data = "t1";
   const app = createScraperApp(deps);
-  const result = await app.click({ ref: "e1" }, { includeSnapshot: true });
+  const result = await app.upload(
+    { ref: "e1" },
+    "/tmp/x.txt",
+    { includeSnapshot: true },
+  );
   assertEquals(result.snapshot?.yaml, "- text: hello\n");
+});
+
+Deno.test("upload: dialog appearance during upload aggregates as error", async () => {
+  let dialogTrigger:
+    | ((type: string, message: string, defaultPrompt: string) => void)
+    | null = null;
+  const page = stubPage({
+    onDialog: (handler) => {
+      dialogTrigger = handler;
+      return () => {
+        dialogTrigger = null;
+      };
+    },
+    uploadFile: () => {
+      dialogTrigger?.("alert", "boom", "");
+      return Promise.resolve();
+    },
+  });
+  const deps = createDeps({
+    createPageConnection: () => Promise.resolve(page),
+  });
+  deps.targetStore.data = "t1";
+  const app = createScraperApp(deps);
+  await assertRejects(
+    () => app.upload({ ref: "e1" }, "/tmp/x"),
+    Error,
+    "a dialog appeared",
+  );
 });
 
 // ---------------------------------------------------------------------------

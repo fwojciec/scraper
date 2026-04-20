@@ -1,12 +1,6 @@
 // Adapter: CLI (Deno.args). Direct CDP operations, no HTTP server.
 
-import type {
-  ActionResult,
-  DialogPolicy,
-  ElementTarget,
-  ScraperApp,
-  WaitRequest,
-} from "../domain/mod.ts";
+import type { ElementTarget, ScraperApp, WaitRequest } from "../domain/mod.ts";
 
 /** Dependencies injected from main.ts composition root. */
 export interface CliDeps {
@@ -22,14 +16,6 @@ Commands:
   snapshot    Generate an ARIA snapshot
   eval        Evaluate JavaScript
   screenshot  Capture a screenshot
-  pages       List open tabs
-  page        Switch active tab
-  click       Click an element
-  fill        Fill an input element
-  type        Type text character by character
-  select      Select a dropdown option
-  submit      Submit a form
-  press-key   Press a keyboard key
   upload      Upload a file to an input
   wait        Wait for a condition
 `;
@@ -104,36 +90,6 @@ function parseTarget(
   return [undefined, "either --ref or --selector is required"];
 }
 
-/** Parse --on-dialog flag into a DialogPolicy. Returns [policy, error]. */
-function parseDialogPolicy(
-  flags: Record<string, string | true>,
-): [DialogPolicy | undefined, string | undefined] {
-  const val = flagString(flags, "on-dialog");
-  if (val === undefined) return [undefined, undefined];
-
-  if (val === "accept") return [{ action: "accept" }, undefined];
-  if (val === "dismiss") return [{ action: "dismiss" }, undefined];
-  if (val.startsWith("accept:")) {
-    return [{ action: "accept", text: val.slice(7) }, undefined];
-  }
-  return [
-    undefined,
-    "invalid --on-dialog value: use 'accept', 'dismiss', or 'accept:<text>'",
-  ];
-}
-
-/** Output an ActionResult: status to stderr, snapshot YAML to stdout. */
-function outputActionResult(
-  result: ActionResult,
-  statusLine: string,
-  deps: CliDeps,
-): void {
-  deps.stderr(statusLine + "\n");
-  if (result.snapshot) {
-    deps.stdout(result.snapshot.yaml);
-  }
-}
-
 async function handleNavigate(args: string[], deps: CliDeps): Promise<number> {
   const { positional, flags } = parseFlags(args);
   const url = positional[0];
@@ -142,17 +98,18 @@ async function handleNavigate(args: string[], deps: CliDeps): Promise<number> {
     return 1;
   }
 
-  const includeSnapshot = flagBoolean(flags, "snapshot");
-  const [onDialog, dialogErr] = parseDialogPolicy(flags);
-  if (dialogErr) {
-    deps.stderr(`error: ${dialogErr}\n`);
+  if ("on-dialog" in flags) {
+    deps.stderr("error: --on-dialog is not supported in this build\n");
     return 1;
   }
 
+  const includeSnapshot = flagBoolean(flags, "snapshot");
+
   try {
-    const result = await deps.app.navigate(url, { includeSnapshot, onDialog });
+    const result = await deps.app.navigate(url, { includeSnapshot });
     if (result.snapshot) {
-      outputActionResult(result, `navigated to ${url}`, deps);
+      deps.stderr(`navigated to ${url}\n`);
+      deps.stdout(result.snapshot.yaml);
     } else {
       deps.stdout(`navigated to ${url}\n`);
     }
@@ -212,110 +169,6 @@ async function handleScreenshot(args: string[], deps: CliDeps): Promise<number> 
   try {
     const path = await deps.app.screenshot(fullPage || undefined);
     deps.stdout(path + "\n");
-    return 0;
-  } catch (err) {
-    deps.stderr(`error: ${err instanceof Error ? err.message : err}\n`);
-    return 1;
-  }
-}
-
-async function handlePages(deps: CliDeps): Promise<number> {
-  try {
-    const pages = await deps.app.pages();
-    if (pages.length === 0) {
-      deps.stdout("no open tabs\n");
-      return 0;
-    }
-    for (const page of pages) {
-      const marker = page.active ? "* " : "  ";
-      deps.stdout(`${marker}${page.pageId}  ${page.title}  ${page.url}\n`);
-    }
-    return 0;
-  } catch (err) {
-    deps.stderr(`error: ${err instanceof Error ? err.message : err}\n`);
-    return 1;
-  }
-}
-
-async function handlePage(args: string[], deps: CliDeps): Promise<number> {
-  const { positional } = parseFlags(args);
-  const pageId = positional[0];
-  if (!pageId) {
-    deps.stderr("error: pageId is required\nUsage: scraper page <pageId>\n");
-    return 1;
-  }
-
-  try {
-    await deps.app.selectPage(pageId);
-    deps.stdout(`switched to page ${pageId}\n`);
-    return 0;
-  } catch (err) {
-    deps.stderr(`error: ${err instanceof Error ? err.message : err}\n`);
-    return 1;
-  }
-}
-
-async function handleClick(args: string[], deps: CliDeps): Promise<number> {
-  const { flags } = parseFlags(args);
-  const [target, targetErr] = parseTarget(flags);
-  if (targetErr) {
-    deps.stderr(`error: ${targetErr}\nUsage: scraper click --ref <ref> | --selector <css>\n`);
-    return 1;
-  }
-
-  const includeSnapshot = flagBoolean(flags, "snapshot");
-  const [onDialog, dialogErr] = parseDialogPolicy(flags);
-  if (dialogErr) {
-    deps.stderr(`error: ${dialogErr}\n`);
-    return 1;
-  }
-
-  try {
-    const result = await deps.app.click(target!, { includeSnapshot, onDialog });
-    const label = "ref" in target! ? `ref ${target!.ref}` : `selector "${target!.selector}"`;
-    if (result.snapshot) {
-      outputActionResult(result, `clicked ${label}`, deps);
-    } else {
-      deps.stdout(`clicked ${label}\n`);
-    }
-    return 0;
-  } catch (err) {
-    deps.stderr(`error: ${err instanceof Error ? err.message : err}\n`);
-    return 1;
-  }
-}
-
-async function handleFill(args: string[], deps: CliDeps): Promise<number> {
-  const { positional, flags } = parseFlags(args);
-  const [target, targetErr] = parseTarget(flags);
-  if (targetErr) {
-    deps.stderr(
-      `error: ${targetErr}\nUsage: scraper fill --ref <ref> | --selector <css> <value>\n`,
-    );
-    return 1;
-  }
-
-  const value = positional[0];
-  if (value === undefined) {
-    deps.stderr("error: value is required\nUsage: scraper fill --ref <ref> <value>\n");
-    return 1;
-  }
-
-  const includeSnapshot = flagBoolean(flags, "snapshot");
-  const [onDialog, dialogErr] = parseDialogPolicy(flags);
-  if (dialogErr) {
-    deps.stderr(`error: ${dialogErr}\n`);
-    return 1;
-  }
-
-  try {
-    const result = await deps.app.fill(target!, value, { includeSnapshot, onDialog });
-    const label = "ref" in target! ? `ref ${target!.ref}` : `selector "${target!.selector}"`;
-    if (result.snapshot) {
-      outputActionResult(result, `filled ${label}`, deps);
-    } else {
-      deps.stdout(`filled ${label}\n`);
-    }
     return 0;
   } catch (err) {
     deps.stderr(`error: ${err instanceof Error ? err.message : err}\n`);
@@ -384,162 +237,6 @@ async function handleWait(args: string[], deps: CliDeps): Promise<number> {
   }
 }
 
-async function handleType(args: string[], deps: CliDeps): Promise<number> {
-  const { positional, flags } = parseFlags(args);
-  const [target, targetErr] = parseTarget(flags);
-  if (targetErr) {
-    deps.stderr(
-      `error: ${targetErr}\nUsage: scraper type --ref <ref> | --selector <css> <text>\n`,
-    );
-    return 1;
-  }
-
-  const text = positional[0];
-  if (text === undefined) {
-    deps.stderr("error: text is required\nUsage: scraper type --ref <ref> <text>\n");
-    return 1;
-  }
-
-  const includeSnapshot = flagBoolean(flags, "snapshot");
-  const [onDialog, dialogErr] = parseDialogPolicy(flags);
-  if (dialogErr) {
-    deps.stderr(`error: ${dialogErr}\n`);
-    return 1;
-  }
-
-  try {
-    const result = await deps.app.type(target!, text, { includeSnapshot, onDialog });
-    const label = "ref" in target! ? `ref ${target!.ref}` : `selector "${target!.selector}"`;
-    if (result.snapshot) {
-      outputActionResult(result, `typed into ${label}`, deps);
-    } else {
-      deps.stdout(`typed into ${label}\n`);
-    }
-    return 0;
-  } catch (err) {
-    deps.stderr(`error: ${err instanceof Error ? err.message : err}\n`);
-    return 1;
-  }
-}
-
-async function handleSelect(args: string[], deps: CliDeps): Promise<number> {
-  const { positional, flags } = parseFlags(args);
-  const [target, targetErr] = parseTarget(flags);
-  if (targetErr) {
-    deps.stderr(
-      `error: ${targetErr}\nUsage: scraper select --ref <ref> | --selector <css> <value>\n`,
-    );
-    return 1;
-  }
-
-  const value = positional[0];
-  if (value === undefined) {
-    deps.stderr("error: value is required\nUsage: scraper select --ref <ref> <value>\n");
-    return 1;
-  }
-
-  const includeSnapshot = flagBoolean(flags, "snapshot");
-  const [onDialog, dialogErr] = parseDialogPolicy(flags);
-  if (dialogErr) {
-    deps.stderr(`error: ${dialogErr}\n`);
-    return 1;
-  }
-
-  try {
-    const result = await deps.app.selectOption(target!, value, { includeSnapshot, onDialog });
-    const label = "ref" in target! ? `ref ${target!.ref}` : `selector "${target!.selector}"`;
-    if (result.snapshot) {
-      outputActionResult(result, `selected "${value}" in ${label}`, deps);
-    } else {
-      deps.stdout(`selected "${value}" in ${label}\n`);
-    }
-    return 0;
-  } catch (err) {
-    deps.stderr(`error: ${err instanceof Error ? err.message : err}\n`);
-    return 1;
-  }
-}
-
-async function handleSubmit(args: string[], deps: CliDeps): Promise<number> {
-  const { flags } = parseFlags(args);
-  const [target, targetErr] = parseTarget(flags);
-  if (targetErr) {
-    deps.stderr(
-      `error: ${targetErr}\nUsage: scraper submit --ref <ref> | --selector <css>\n`,
-    );
-    return 1;
-  }
-
-  const includeSnapshot = flagBoolean(flags, "snapshot");
-  const [onDialog, dialogErr] = parseDialogPolicy(flags);
-  if (dialogErr) {
-    deps.stderr(`error: ${dialogErr}\n`);
-    return 1;
-  }
-
-  try {
-    const result = await deps.app.submit(target!, { includeSnapshot, onDialog });
-    const label = "ref" in target! ? `ref ${target!.ref}` : `selector "${target!.selector}"`;
-    if (result.snapshot) {
-      outputActionResult(result, `submitted ${label}`, deps);
-    } else {
-      deps.stdout(`submitted ${label}\n`);
-    }
-    return 0;
-  } catch (err) {
-    deps.stderr(`error: ${err instanceof Error ? err.message : err}\n`);
-    return 1;
-  }
-}
-
-async function handlePressKey(args: string[], deps: CliDeps): Promise<number> {
-  const { positional, flags } = parseFlags(args);
-  const key = positional[0];
-  if (!key) {
-    deps.stderr(
-      "error: key is required\nUsage: scraper press-key <key> [--ref <ref> | --selector <css>]\n",
-    );
-    return 1;
-  }
-
-  const ref = flagString(flags, "ref");
-  const selector = flagString(flags, "selector");
-
-  if (ref && selector) {
-    deps.stderr("error: provide either --ref or --selector, not both\n");
-    return 1;
-  }
-
-  const target: ElementTarget | undefined = ref ? { ref } : selector ? { selector } : undefined;
-
-  const includeSnapshot = flagBoolean(flags, "snapshot");
-  const [onDialog, dialogErr] = parseDialogPolicy(flags);
-  if (dialogErr) {
-    deps.stderr(`error: ${dialogErr}\n`);
-    return 1;
-  }
-
-  try {
-    const result = await deps.app.pressKey(key, target, { includeSnapshot, onDialog });
-    let statusLine: string;
-    if (target) {
-      const label = "ref" in target ? `ref ${target.ref}` : `selector "${target.selector}"`;
-      statusLine = `pressed ${key} on ${label}`;
-    } else {
-      statusLine = `pressed ${key}`;
-    }
-    if (result.snapshot) {
-      outputActionResult(result, statusLine, deps);
-    } else {
-      deps.stdout(statusLine + "\n");
-    }
-    return 0;
-  } catch (err) {
-    deps.stderr(`error: ${err instanceof Error ? err.message : err}\n`);
-    return 1;
-  }
-}
-
 async function handleUpload(args: string[], deps: CliDeps): Promise<number> {
   const { positional, flags } = parseFlags(args);
   const [target, targetErr] = parseTarget(flags);
@@ -558,21 +255,19 @@ async function handleUpload(args: string[], deps: CliDeps): Promise<number> {
     return 1;
   }
 
-  const includeSnapshot = flagBoolean(flags, "snapshot");
-  const [onDialog, dialogErr] = parseDialogPolicy(flags);
-  if (dialogErr) {
-    deps.stderr(`error: ${dialogErr}\n`);
+  if ("on-dialog" in flags) {
+    deps.stderr("error: --on-dialog is not supported in this build\n");
     return 1;
   }
 
+  const includeSnapshot = flagBoolean(flags, "snapshot");
+
   try {
-    const result = await deps.app.upload(target!, filePath, {
-      includeSnapshot,
-      onDialog,
-    });
+    const result = await deps.app.upload(target!, filePath, { includeSnapshot });
     const label = "ref" in target! ? `ref ${target!.ref}` : `selector "${target!.selector}"`;
     if (result.snapshot) {
-      outputActionResult(result, `uploaded to ${label}`, deps);
+      deps.stderr(`uploaded to ${label}\n`);
+      deps.stdout(result.snapshot.yaml);
     } else {
       deps.stdout(`uploaded to ${label}\n`);
     }
@@ -601,22 +296,6 @@ export function runCli(args: string[], deps: CliDeps): Promise<number> {
       return handleEval(rest, deps);
     case "screenshot":
       return handleScreenshot(rest, deps);
-    case "pages":
-      return handlePages(deps);
-    case "page":
-      return handlePage(rest, deps);
-    case "click":
-      return handleClick(rest, deps);
-    case "fill":
-      return handleFill(rest, deps);
-    case "type":
-      return handleType(rest, deps);
-    case "select":
-      return handleSelect(rest, deps);
-    case "submit":
-      return handleSubmit(rest, deps);
-    case "press-key":
-      return handlePressKey(rest, deps);
     case "upload":
       return handleUpload(rest, deps);
     case "wait":
