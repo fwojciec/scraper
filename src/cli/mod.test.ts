@@ -908,33 +908,48 @@ Deno.test("upload without target returns error", async () => {
   assertStringIncludes(io.err, "either --ref or --selector is required");
 });
 
-Deno.test("upload --snapshot outputs YAML", async () => {
+Deno.test("upload rejects --snapshot with a clear error (no auto-snapshot per design)", async () => {
   const io = capture();
+  let appCalled = false;
   const code = await runCli(
     ["upload", "--tab", "4AE7", "--ref", "e4", "./photo.jpg", "--snapshot"],
     stubDeps({
       app: {
-        upload: (_targetId, _target, _path, opts) => {
-          assertEquals(opts?.includeSnapshot, true);
-          return Promise.resolve({
-            snapshot: {
-              yaml: "- textbox\n",
-              refs: {},
-              lastRefCounter: 0,
-              snapshotId: "s1",
-              title: "",
-              url: "https://example.com/",
-            },
-          });
+        upload: () => {
+          appCalled = true;
+          return Promise.resolve({});
         },
       },
       stdout: io.stdout,
       stderr: io.stderr,
     }),
   );
+  assertEquals(code, 1);
+  assertEquals(appCalled, false, "upload must not reach the app layer when --snapshot is given");
+  assertStringIncludes(io.err, "--snapshot is not supported on upload");
+  assertStringIncludes(io.err, "scraper snapshot --tab");
+});
+
+Deno.test("upload does not pass includeSnapshot to the app layer", async () => {
+  let receivedOpts: unknown;
+  const code = await runCli(
+    ["upload", "--tab", "4AE7", "--ref", "e4", "./photo.jpg"],
+    stubDeps({
+      app: {
+        upload: (_targetId, _target, _path, opts) => {
+          receivedOpts = opts;
+          return Promise.resolve({});
+        },
+      },
+    }),
+  );
   assertEquals(code, 0);
-  assertStringIncludes(io.err, "uploaded");
-  assertStringIncludes(io.out, "- textbox");
+  // The CLI must never opt into a snapshot for upload — the agent runs
+  // `scraper snapshot --tab <id>` explicitly per the Tier B design.
+  assertEquals(
+    (receivedOpts as { includeSnapshot?: boolean } | undefined)?.includeSnapshot,
+    undefined,
+  );
 });
 
 Deno.test("navigate rejects --snapshot with a clear migration message", async () => {

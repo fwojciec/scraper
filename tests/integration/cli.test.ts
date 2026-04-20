@@ -525,6 +525,163 @@ Deno.test("CLI: wait --text auto-snapshots when the text appears", async () => {
   }
 });
 
+Deno.test("CLI: upload --selector sets the file on the input (visible via eval)", async () => {
+  const rt = await startTestRuntime();
+  const fixtures = startFixtureServer();
+  const tmpFile = await Deno.makeTempFile({ prefix: "scraper-upload-", suffix: ".txt" });
+  await Deno.writeTextFile(tmpFile, "hello upload");
+  try {
+    await runScraper(
+      ["navigate", "--tab", rt.targetId, fixtures.url("actions.html")],
+      rt.env,
+    );
+    const upload = await runScraper(
+      ["upload", "--tab", rt.targetId, "--selector", "input[type=file]", tmpFile],
+      rt.env,
+    );
+    assertEquals(upload.code, 0, `upload failed: ${upload.stderr}`);
+    // Stdout reports the resolved target so the agent knows which control was hit.
+    assertStringIncludes(upload.stdout, "uploaded to selector");
+    // Verify the upload landed by reading the input's FileList back through eval.
+    const filename = tmpFile.split("/").pop() ?? "";
+    const verify = await runScraper(
+      [
+        "eval",
+        "--tab",
+        rt.targetId,
+        `document.getElementById('file-input').files[0].name`,
+      ],
+      rt.env,
+    );
+    assertEquals(verify.code, 0, `eval failed: ${verify.stderr}`);
+    assertStringIncludes(verify.stdout, JSON.stringify(filename));
+  } finally {
+    await fixtures.close();
+    await stopTestRuntime(rt);
+    try {
+      await Deno.remove(tmpFile);
+    } catch { /* best effort */ }
+  }
+});
+
+Deno.test("CLI: upload --ref resolves backendNodeId and sets the file", async () => {
+  const rt = await startTestRuntime();
+  const fixtures = startFixtureServer();
+  const tmpFile = await Deno.makeTempFile({ prefix: "scraper-upload-", suffix: ".dat" });
+  await Deno.writeTextFile(tmpFile, "ref upload payload");
+  try {
+    await runScraper(
+      ["navigate", "--tab", rt.targetId, fixtures.url("actions.html")],
+      rt.env,
+    );
+    // navigate auto-snapshots and writes refs.<targetId>.json. The file input
+    // is one of several form refs; find it by tagName/type via $ref so this
+    // test stays robust to ARIA-tree ordering changes.
+    const refsPath = `${rt.tmpHome}/.scraper/refs.${rt.targetId}.json`;
+    const refsJson = JSON.parse(await Deno.readTextFile(refsPath)) as {
+      refs: Record<string, number>;
+    };
+    let fileRef: string | undefined;
+    for (const candidate of Object.keys(refsJson.refs)) {
+      const probe = await runScraper(
+        [
+          "eval",
+          "--tab",
+          rt.targetId,
+          `$ref("${candidate}").tagName === "INPUT" && $ref("${candidate}").type === "file"`,
+        ],
+        rt.env,
+      );
+      if (probe.code === 0 && probe.stdout.trim() === "true") {
+        fileRef = candidate;
+        break;
+      }
+    }
+    assert(
+      fileRef !== undefined,
+      `expected to find a ref for the file input; refs: ${Object.keys(refsJson.refs).join(",")}`,
+    );
+
+    const upload = await runScraper(
+      ["upload", "--tab", rt.targetId, "--ref", fileRef!, tmpFile],
+      rt.env,
+    );
+    assertEquals(upload.code, 0, `upload failed: ${upload.stderr}`);
+    assertStringIncludes(upload.stdout, `uploaded to ref ${fileRef}`);
+
+    const filename = tmpFile.split("/").pop() ?? "";
+    const verify = await runScraper(
+      [
+        "eval",
+        "--tab",
+        rt.targetId,
+        `$ref("${fileRef}").files[0].name`,
+      ],
+      rt.env,
+    );
+    assertEquals(verify.code, 0, `eval failed: ${verify.stderr}`);
+    assertStringIncludes(verify.stdout, JSON.stringify(filename));
+  } finally {
+    await fixtures.close();
+    await stopTestRuntime(rt);
+    try {
+      await Deno.remove(tmpFile);
+    } catch { /* best effort */ }
+  }
+});
+
+Deno.test("CLI: upload with stale --ref reports the canonical stale-ref error", async () => {
+  const rt = await startTestRuntime();
+  const fixtures = startFixtureServer();
+  const tmpFile = await Deno.makeTempFile({ prefix: "scraper-upload-", suffix: ".txt" });
+  try {
+    await runScraper(
+      ["navigate", "--tab", rt.targetId, fixtures.url("actions.html")],
+      rt.env,
+    );
+    // Refs are minted monotonically; e9999 is far above anything a single
+    // snapshot of the fixture would hand out, so the lookup must miss.
+    const upload = await runScraper(
+      ["upload", "--tab", rt.targetId, "--ref", "e9999", tmpFile],
+      rt.env,
+    );
+    assertEquals(upload.code, 1);
+    assertStringIncludes(upload.stderr, "ref e9999 is stale");
+  } finally {
+    await fixtures.close();
+    await stopTestRuntime(rt);
+    try {
+      await Deno.remove(tmpFile);
+    } catch { /* best effort */ }
+  }
+});
+
+Deno.test("CLI: upload of a non-file input rejects with a clear error", async () => {
+  const rt = await startTestRuntime();
+  const fixtures = startFixtureServer();
+  const tmpFile = await Deno.makeTempFile({ prefix: "scraper-upload-", suffix: ".txt" });
+  try {
+    await runScraper(
+      ["navigate", "--tab", rt.targetId, fixtures.url("actions.html")],
+      rt.env,
+    );
+    // Targeting the text input should be rejected by the upload check —
+    // DOM.setFileInputFiles only makes sense on input[type=file].
+    const upload = await runScraper(
+      ["upload", "--tab", rt.targetId, "--selector", "#name-input", tmpFile],
+      rt.env,
+    );
+    assertEquals(upload.code, 1);
+    assertStringIncludes(upload.stderr, "not a file input");
+  } finally {
+    await fixtures.close();
+    await stopTestRuntime(rt);
+    try {
+      await Deno.remove(tmpFile);
+    } catch { /* best effort */ }
+  }
+});
+
 Deno.test("CLI: wait timeout exits 1 with a clear error and no pointer on stdout", async () => {
   const rt = await startTestRuntime();
   const fixtures = startFixtureServer();

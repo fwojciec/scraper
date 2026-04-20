@@ -322,6 +322,16 @@ export function createScraperApp(deps: ScraperAppDeps): ScraperApp {
     upload(targetId: string, target: ElementTarget, filePath: string, opts?: ActionOptions) {
       return withPageConnection(targetId, async (page) => {
         const refs = await deps.refsStore.read(targetId);
+        // Match eval's stale-ref contract: when the agent passes `--ref eN` and
+        // eN is not in this tab's current refs, fail with the canonical
+        // stale-ref error pointing at refs.<targetId>.json — not the lower-level
+        // "unknown ref" message resolveTarget produces. Keeps the agent's error
+        // recovery loop ("run snapshot, retry") consistent across commands.
+        if ("ref" in target && !(refs && target.ref in refs)) {
+          throw new Error(
+            formatStaleRefError(target.ref, targetId, refs ? Object.keys(refs) : []),
+          );
+        }
         const objectId = await deps.resolveTarget(target, page, refs);
         return await withDialogHandling(page, async () => {
           await page.uploadFile(objectId, filePath);

@@ -408,23 +408,27 @@ async function handleUpload(args: string[], deps: CliDeps): Promise<number> {
     return 1;
   }
 
+  if ("snapshot" in flags) {
+    // Per the Tier B design (§Auto-snapshot rule), upload does NOT auto-snapshot —
+    // the agent calls `scraper snapshot --tab <id>` explicitly when the upload
+    // changed the form. Fail loudly rather than silently honoring an opt-in
+    // the design no longer documents.
+    deps.stderr(
+      "error: --snapshot is not supported on upload — call `scraper snapshot --tab <id>` if the upload changed the form\n",
+    );
+    return 1;
+  }
+
   const [targetId, tabErr] = await resolveTabFlag(flags, deps);
   if (tabErr) {
     deps.stderr(`error: ${tabErr}\n`);
     return 1;
   }
 
-  const includeSnapshot = flagBoolean(flags, "snapshot");
-
   try {
-    const result = await deps.app.upload(targetId!, target!, filePath, { includeSnapshot });
+    await deps.app.upload(targetId!, target!, filePath);
     const label = "ref" in target! ? `ref ${target!.ref}` : `selector "${target!.selector}"`;
-    if (result.snapshot) {
-      deps.stderr(`uploaded to ${label}\n`);
-      deps.stdout(result.snapshot.yaml);
-    } else {
-      deps.stdout(`uploaded to ${label}\n`);
-    }
+    deps.stdout(`uploaded to ${label}\n`);
     return 0;
   } catch (err) {
     deps.stderr(`error: ${err instanceof Error ? err.message : err}\n`);

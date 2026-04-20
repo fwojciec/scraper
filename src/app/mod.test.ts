@@ -654,6 +654,7 @@ Deno.test("upload: returns snapshot when includeSnapshot set", async () => {
   const deps = createDeps({
     createPageConnection: () => Promise.resolve(stubPage()),
   });
+  deps.refsStore.data = { t1: { refs: { e1: 42 }, snapshotId: "s1" } };
   const app = createScraperApp(deps);
   const result = await app.upload(
     "t1",
@@ -686,12 +687,54 @@ Deno.test("upload: dialog appearance during upload aggregates as error", async (
   const deps = createDeps({
     createPageConnection: () => Promise.resolve(page),
   });
+  deps.refsStore.data = { t1: { refs: { e1: 42 }, snapshotId: "s1" } };
   const app = createScraperApp(deps);
   await assertRejects(
     () => app.upload("t1", { ref: "e1" }, "/tmp/x"),
     Error,
     "a dialog appeared",
   );
+});
+
+Deno.test("upload: stale --ref produces the canonical stale-ref error (no refs file)", async () => {
+  const deps = createDeps({
+    createPageConnection: () => Promise.resolve(stubPage()),
+  });
+  const app = createScraperApp(deps);
+  // refsStore has nothing for t1 → upload must fail before touching CDP.
+  const err = await assertRejects(
+    () => app.upload("t1", { ref: "e9999" }, "/tmp/x"),
+    Error,
+  );
+  assertEquals(
+    err.message.startsWith("ref e9999 is stale — not in refs.t1.json"),
+    true,
+    `expected canonical stale-ref message, got: ${err.message}`,
+  );
+});
+
+Deno.test("upload: --ref not in current refs map produces the canonical stale-ref error", async () => {
+  let uploadCalled = false;
+  const page = stubPage({
+    uploadFile: () => {
+      uploadCalled = true;
+      return Promise.resolve();
+    },
+  });
+  const deps = createDeps({
+    createPageConnection: () => Promise.resolve(page),
+  });
+  deps.refsStore.data = { t1: { refs: { e1: 42 }, snapshotId: "s1" } };
+  const app = createScraperApp(deps);
+  const err = await assertRejects(
+    () => app.upload("t1", { ref: "e9999" }, "/tmp/x"),
+    Error,
+  );
+  // The error must list the live refs so the agent can re-run snapshot if needed.
+  assertEquals(err.message.includes("ref e9999 is stale"), true);
+  assertEquals(err.message.includes("current refs: e1"), true);
+  // Stale check fires before CDP — no upload attempt should reach the page.
+  assertEquals(uploadCalled, false);
 });
 
 // ---------------------------------------------------------------------------
