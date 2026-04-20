@@ -21,6 +21,7 @@ import {
   type RefsStore,
 } from "./app/mod.ts";
 import type { RefMap } from "./domain/mod.ts";
+import { isArtifactFile, selectDeletions } from "./domain/retention.ts";
 
 const HOME = Deno.env.get("HOME");
 if (!HOME) throw new Error("HOME environment variable is not set");
@@ -97,15 +98,88 @@ function createCounterStore(path: string): CounterStore {
 const refCounterStore = createCounterStore(REF_COUNTER_PATH);
 const artifactCounterStore = createCounterStore(ARTIFACT_COUNTER_PATH);
 
+/**
+ * Retention policy for `~/.scraper/` — Tier B design §Cleanup:
+ * keep the newest 20 artifacts, delete anything older than 24 hours.
+ * Scope is `s{N}.yaml` and `shot{N}.png` only; ref files and counters are
+ * handled by their own lifecycle (dead-refs cleanup / monotonic writes).
+ */
+const RETENTION_MAX_COUNT = 20;
+const RETENTION_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Opportunistic GC of snapshot/screenshot artifacts, called after every
+ * successful artifact write. Best-effort: any IO error during scan or delete
+ * is swallowed after a warning — an eviction failure must not turn a
+ * successful `snapshot` / `screenshot` command into an error.
+ */
+async function pruneArtifacts(): Promise<void> {
+  let entries: AsyncIterable<Deno.DirEntry>;
+  try {
+    entries = Deno.readDir(STATE_DIR);
+  } catch (e) {
+    if (e instanceof Deno.errors.NotFound) return;
+    Deno.stderr.writeSync(
+      encoder.encode(`warning: artifact retention scan failed: ${errorMessage(e)}\n`),
+    );
+    return;
+  }
+
+  const candidates: { name: string; mtimeMs: number }[] = [];
+  try {
+    for await (const entry of entries) {
+      if (!entry.isFile) continue;
+      if (!isArtifactFile(entry.name)) continue;
+      const path = `${STATE_DIR}/${entry.name}`;
+      let stat: Deno.FileInfo;
+      try {
+        stat = await Deno.stat(path);
+      } catch (e) {
+        if (e instanceof Deno.errors.NotFound) continue;
+        throw e;
+      }
+      const mtimeMs = stat.mtime?.getTime() ?? 0;
+      candidates.push({ name: entry.name, mtimeMs });
+    }
+  } catch (e) {
+    Deno.stderr.writeSync(
+      encoder.encode(`warning: artifact retention scan failed: ${errorMessage(e)}\n`),
+    );
+    return;
+  }
+
+  const toDelete = selectDeletions(candidates, {
+    maxCount: RETENTION_MAX_COUNT,
+    maxAgeMs: RETENTION_MAX_AGE_MS,
+    nowMs: Date.now(),
+  });
+  for (const name of toDelete) {
+    try {
+      await Deno.remove(`${STATE_DIR}/${name}`);
+    } catch (e) {
+      if (e instanceof Deno.errors.NotFound) continue;
+      Deno.stderr.writeSync(
+        encoder.encode(`warning: failed to prune ${name}: ${errorMessage(e)}\n`),
+      );
+    }
+  }
+}
+
+function errorMessage(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
 const artifactStore: ArtifactStore = {
   async writeSnapshot(snapshotId, yaml) {
     const path = snapshotPathFor(snapshotId);
     await writeFileAtomic(path, yaml);
+    await pruneArtifacts();
     return path;
   },
   async writeScreenshot(screenshotId, png) {
     const path = screenshotPathFor(screenshotId);
     await writeFileAtomic(path, png);
+    await pruneArtifacts();
     return path;
   },
 };

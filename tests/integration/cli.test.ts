@@ -766,3 +766,84 @@ Deno.test("CLI: wait timeout exits 1 with a clear error and no pointer on stdout
     await stopTestRuntime(rt);
   }
 });
+
+Deno.test("CLI E2E: artifact retention keeps newest 20 and drops >24h files on next write", async () => {
+  const rt = await startTestRuntime();
+  const fixtures = startFixtureServer();
+  try {
+    const stateDir = `${rt.tmpHome}/.scraper`;
+    await Deno.mkdir(stateDir, { recursive: true });
+
+    // Seed: 22 recent fake snapshot files + 2 young-but-old-by-count +
+    // 1 old-by-age file that would otherwise be kept. The post-retention
+    // count depends on the actual write triggering the GC, so assertions
+    // check membership and invariants, not raw count arithmetic.
+    const now = Date.now();
+    const hour = 3_600_000;
+
+    // 25 seeded snapshot files: first 23 recent (<24h), last 2 ancient (>24h).
+    for (let i = 1; i <= 25; i++) {
+      const path = `${stateDir}/s${i}.yaml`;
+      await Deno.writeTextFile(path, `snapshot: s${i}\n`);
+      // s25 is the newest seeded file; s1 the oldest recent. s24/s25 we keep
+      // at "now" so the 48h-old files are unambiguously the two we added below.
+      const ageHours = i <= 23 ? i : 48 + (i - 23); // s24 = 49h, s25 = 50h
+      const mtime = new Date(now - ageHours * hour);
+      await Deno.utime(path, mtime, mtime);
+    }
+
+    // Similarly seed a ref file and a counter — retention must NOT touch these.
+    const refsPath = `${stateDir}/refs.seeded.json`;
+    await Deno.writeTextFile(refsPath, `{"snapshotId":"s1","refs":{}}`);
+    const ancient = new Date(now - 100 * hour);
+    await Deno.utime(refsPath, ancient, ancient);
+
+    const counterPath = `${stateDir}/counter`;
+    await Deno.writeTextFile(counterPath, "25");
+    await Deno.utime(counterPath, ancient, ancient);
+
+    // Trigger retention by performing a real write. navigate auto-snapshots,
+    // so this produces one fresh s{N}.yaml and runs pruneArtifacts after.
+    const nav = await runScraper(
+      ["navigate", "--tab", rt.targetId, fixtures.url("bestseller-table.html")],
+      rt.env,
+    );
+    assertEquals(nav.code, 0, `navigate failed: ${nav.stderr}`);
+
+    // Post-retention directory inventory.
+    const survivors: string[] = [];
+    for await (const entry of Deno.readDir(stateDir)) {
+      if (entry.isFile) survivors.push(entry.name);
+    }
+
+    // The two >24h seeded files must be gone regardless of count (age rule).
+    assert(
+      !survivors.includes("s24.yaml"),
+      `49h-old artifact should be deleted, survivors: ${survivors.join(", ")}`,
+    );
+    assert(
+      !survivors.includes("s25.yaml"),
+      `50h-old artifact should be deleted, survivors: ${survivors.join(", ")}`,
+    );
+
+    // Out-of-scope files must survive: refs and counter are not artifact files.
+    assert(
+      survivors.includes("refs.seeded.json"),
+      `refs file must survive retention, survivors: ${survivors.join(", ")}`,
+    );
+    assert(
+      survivors.includes("counter"),
+      `counter must survive retention, survivors: ${survivors.join(", ")}`,
+    );
+
+    // Count rule: at most 20 snapshot/screenshot artifacts remain.
+    const artifacts = survivors.filter((n) => /^(?:s\d+\.yaml|shot\d+\.png)$/.test(n));
+    assert(
+      artifacts.length <= 20,
+      `retention must keep at most 20 artifacts, got ${artifacts.length}: ${artifacts.join(", ")}`,
+    );
+  } finally {
+    await fixtures.close();
+    await stopTestRuntime(rt);
+  }
+});
