@@ -462,3 +462,98 @@ Deno.test("CLI: navigate --tab and --new are mutually exclusive", async () => {
     await stopTestRuntime(rt);
   }
 });
+
+Deno.test("CLI: wait --selector auto-snapshots and emits `waited · snapshot ...` pointer", async () => {
+  const rt = await startTestRuntime();
+  const fixtures = startFixtureServer();
+  try {
+    // navigate auto-snapshots → s1.yaml
+    await runScraper(
+      ["navigate", "--tab", rt.targetId, fixtures.url("actions.html")],
+      rt.env,
+    );
+    // Trigger the class addition that occurs ~200ms later. The selector
+    // `#attr-target.ready` only matches after that setTimeout fires, so the
+    // wait must observe a DOM mutation, not an initial match.
+    await runScraper(
+      ["eval", "--tab", rt.targetId, "document.getElementById('add-class-btn').click()"],
+      rt.env,
+    );
+    const result = await runScraper(
+      ["wait", "--tab", rt.targetId, "--selector", "#attr-target.ready"],
+      rt.env,
+    );
+    assertEquals(result.code, 0, `wait failed: ${result.stderr}`);
+    const lines = result.stdout.split("\n").filter((l) => l.length > 0);
+    assertEquals(lines.length, 1, `expected single pointer line, got: ${result.stdout}`);
+    assert(
+      /^waited · snapshot s\d+ · .+ · \d+ refs · \d+B$/.test(lines[0]),
+      `pointer should match design format, got: ${lines[0]}`,
+    );
+    // Auto-snapshot produced a new YAML file — the one after the initial
+    // navigate's s1.yaml.
+    await Deno.stat(`${rt.tmpHome}/.scraper/s2.yaml`);
+  } finally {
+    await fixtures.close();
+    await stopTestRuntime(rt);
+  }
+});
+
+Deno.test("CLI: wait --text auto-snapshots when the text appears", async () => {
+  const rt = await startTestRuntime();
+  const fixtures = startFixtureServer();
+  try {
+    await runScraper(
+      ["navigate", "--tab", rt.targetId, fixtures.url("actions.html")],
+      rt.env,
+    );
+    // show-text-btn reveals "Secret Text" ~200ms after click by toggling
+    // display:none. The wait must succeed after that change.
+    await runScraper(
+      ["eval", "--tab", rt.targetId, "document.getElementById('show-text-btn').click()"],
+      rt.env,
+    );
+    const result = await runScraper(
+      ["wait", "--tab", rt.targetId, "--text", "Secret Text"],
+      rt.env,
+    );
+    assertEquals(result.code, 0, `wait failed: ${result.stderr}`);
+    assertStringIncludes(result.stdout, "waited · snapshot s");
+  } finally {
+    await fixtures.close();
+    await stopTestRuntime(rt);
+  }
+});
+
+Deno.test("CLI: wait timeout exits 1 with a clear error and no pointer on stdout", async () => {
+  const rt = await startTestRuntime();
+  const fixtures = startFixtureServer();
+  try {
+    await runScraper(
+      ["navigate", "--tab", rt.targetId, fixtures.url("actions.html")],
+      rt.env,
+    );
+    // Short timeout so the test stays fast. The fixture never renders this
+    // text, so the wait must hit its deadline.
+    const result = await runScraper(
+      [
+        "wait",
+        "--tab",
+        rt.targetId,
+        "--text",
+        "this text will never appear",
+        "--timeout",
+        "300",
+      ],
+      rt.env,
+    );
+    assertEquals(result.code, 1);
+    assertStringIncludes(result.stderr, "timed out waiting for text");
+    assertStringIncludes(result.stderr, "this text will never appear");
+    // No pointer on failure — success-only contract.
+    assertEquals(result.stdout, "");
+  } finally {
+    await fixtures.close();
+    await stopTestRuntime(rt);
+  }
+});

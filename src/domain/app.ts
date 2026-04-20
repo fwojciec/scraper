@@ -41,5 +41,12 @@ export interface ScraperApp {
     filePath: string,
     options?: ActionOptions,
   ): Promise<ActionResult>;
-  wait(targetId: string, request: WaitRequest): Promise<void>;
+  /**
+   * Wait for `request` to be satisfied. On success, the page likely changed in
+   * ways the agent cares about (new text, new element) — the CLI auto-snapshots
+   * by passing `includeSnapshot: true`, which also eagerly invalidates this
+   * tab's refs so a snapshot failure can't leave stale refs addressable.
+   * Failure (timeout) rejects without touching refs or the artifact counter.
+   */
+  wait(targetId: string, request: WaitRequest, options?: ActionOptions): Promise<ActionResult>;
 }

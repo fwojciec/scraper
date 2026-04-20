@@ -310,17 +310,26 @@ async function handleScreenshot(args: string[], deps: CliDeps): Promise<number> 
   }
 }
 
+/**
+ * Default wait timeout, per Tier B design doc §Wait Semantics. Overridable via
+ * `--timeout <ms>`. Applied at the CLI layer so `app.wait` sees an explicit
+ * value and the cdp-level default (unused by the CLI) can't drift from the
+ * documented contract.
+ */
+const DEFAULT_WAIT_TIMEOUT_MS = 30_000;
+
 async function handleWait(args: string[], deps: CliDeps): Promise<number> {
   const { flags } = parseFlags(args);
 
   const ref = flagString(flags, "ref");
   const selector = flagString(flags, "selector");
   const text = flagString(flags, "text");
-  const [timeoutMs, timeoutErr] = flagNumber(flags, "timeout");
+  const [timeoutOverride, timeoutErr] = flagNumber(flags, "timeout");
   if (timeoutErr) {
     deps.stderr(`error: ${timeoutErr}\n`);
     return 1;
   }
+  const timeoutMs = timeoutOverride ?? DEFAULT_WAIT_TIMEOUT_MS;
 
   // Validate combinations
   if (!ref && !selector && !text) {
@@ -359,17 +368,16 @@ async function handleWait(args: string[], deps: CliDeps): Promise<number> {
   }
 
   try {
-    await deps.app.wait(targetId!, request);
-    if (request.kind === "textInElement") {
-      const label = "ref" in request.target
-        ? `ref ${request.target.ref}`
-        : `selector "${request.target.selector}"`;
-      deps.stdout(`found text "${request.text}" in ${label}\n`);
-    } else if (request.kind === "text") {
-      deps.stdout(`found text "${request.text}"\n`);
-    } else {
-      deps.stdout(`found element matching "${request.selector}"\n`);
+    // Wait auto-snapshots on success per the Tier B design (§Auto-snapshot rule):
+    // the page changed enough for the wait to succeed, so the agent needs fresh
+    // refs. CLI always passes includeSnapshot: true.
+    const result = await deps.app.wait(targetId!, request, { includeSnapshot: true });
+    if (!result.snapshot) {
+      // Defensive: app.wait must return a snapshot when asked. Fail loudly
+      // rather than silently dropping the pointer.
+      throw new Error("wait returned no snapshot");
     }
+    deps.stdout(`waited · ${snapshotPointer(result.snapshot)}\n`);
     return 0;
   } catch (err) {
     deps.stderr(`error: ${err instanceof Error ? err.message : err}\n`);

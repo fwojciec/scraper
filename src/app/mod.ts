@@ -329,8 +329,8 @@ export function createScraperApp(deps: ScraperAppDeps): ScraperApp {
         });
       });
     },
-    wait(targetId: string, request: WaitRequest) {
-      return withPageConnection(targetId, async (page) => {
+    wait(targetId: string, request: WaitRequest, opts?: ActionOptions) {
+      return withPageConnection(targetId, async (page): Promise<ActionResult> => {
         switch (request.kind) {
           case "textInElement": {
             const refs = await deps.refsStore.read(targetId);
@@ -345,6 +345,18 @@ export function createScraperApp(deps: ScraperAppDeps): ScraperApp {
             await page.waitForSelector(request.selector, request.timeoutMs);
             break;
         }
+        if (!opts?.includeSnapshot) return {};
+        // Wait succeeded — the page likely changed (new element / text). Drop
+        // this tab's refs eagerly, before the network-idle gate and snapshot,
+        // so a snapshot failure can't leave stale refs resolving against the
+        // old DOM. See the parallel pattern in `navigate` above.
+        await deps.refsStore.remove(targetId);
+        // Route through `postAction` for the same network-idle stability gate
+        // navigate/upload use: the wait-trigger may only be the first step of
+        // a larger async update (e.g., a results container appears before its
+        // contents finish loading), so snapshotting immediately could capture
+        // an intermediate DOM whose refs go stale by the next command.
+        return await postAction(page, targetId, opts);
       });
     },
   };

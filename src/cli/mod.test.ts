@@ -40,7 +40,17 @@ function stubApp(overrides: Partial<ScraperApp> = {}): ScraperApp {
       }),
     evaluate: () => Promise.resolve({ result: null }),
     screenshot: () => Promise.resolve("/tmp/shot.png"),
-    wait: () => Promise.resolve(),
+    wait: () =>
+      Promise.resolve({
+        snapshot: {
+          yaml: "- heading",
+          refs: {},
+          lastRefCounter: 0,
+          snapshotId: "s1",
+          title: "",
+          url: "https://example.com/",
+        },
+      }),
     upload: () => Promise.resolve({}),
     ...overrides,
   };
@@ -620,28 +630,56 @@ Deno.test("screenshot reports error from dep", async () => {
 
 // --- wait ---
 
+/**
+ * The CLI always passes `includeSnapshot: true` to the app per design
+ * (§Auto-snapshot rule). Helper ensures the stub returns a snapshot so tests
+ * can assert the pointer contract without repeating the YAML boilerplate.
+ */
+function waitStubResolving(
+  tap: (targetId: string, request: unknown, opts: unknown) => void,
+) {
+  return (targetId: string, request: unknown, opts: unknown) => {
+    tap(targetId, request, opts);
+    return Promise.resolve({
+      snapshot: {
+        yaml: "tree: []\n",
+        refs: {},
+        lastRefCounter: 0,
+        snapshotId: "s1",
+        title: "After Wait",
+        url: "https://example.com/",
+      },
+    });
+  };
+}
+
 Deno.test("wait --selector calls dep with selector request", async () => {
   let receivedRequest: unknown;
+  let receivedOpts: unknown;
   const io = capture();
   const code = await runCli(
     ["wait", "--tab", "4AE7", "--selector", ".result"],
     stubDeps({
       app: {
-        wait: (_targetId, request) => {
-          receivedRequest = request;
-          return Promise.resolve();
-        },
+        wait: waitStubResolving((_t, r, o) => {
+          receivedRequest = r;
+          receivedOpts = o;
+        }),
       },
       stdout: io.stdout,
     }),
   );
   assertEquals(code, 0);
+  // Default timeout of 30s must be applied at the CLI layer so the app layer
+  // always sees an explicit value (design doc §Wait Semantics).
   assertEquals(receivedRequest, {
     kind: "selector",
     selector: ".result",
-    timeoutMs: undefined,
+    timeoutMs: 30_000,
   });
-  assertStringIncludes(io.out, 'found element matching ".result"');
+  // Auto-snapshot: wait must always request a snapshot from the app.
+  assertEquals((receivedOpts as { includeSnapshot?: boolean })?.includeSnapshot, true);
+  assertStringIncludes(io.out, "waited · snapshot s1 · After Wait · 0 refs · ");
 });
 
 Deno.test("wait --text calls dep with text request", async () => {
@@ -651,17 +689,16 @@ Deno.test("wait --text calls dep with text request", async () => {
     ["wait", "--tab", "4AE7", "--text", "Success"],
     stubDeps({
       app: {
-        wait: (_targetId, request) => {
-          receivedRequest = request;
-          return Promise.resolve();
-        },
+        wait: waitStubResolving((_t, r) => {
+          receivedRequest = r;
+        }),
       },
       stdout: io.stdout,
     }),
   );
   assertEquals(code, 0);
-  assertEquals(receivedRequest, { kind: "text", text: "Success", timeoutMs: undefined });
-  assertStringIncludes(io.out, 'found text "Success"');
+  assertEquals(receivedRequest, { kind: "text", text: "Success", timeoutMs: 30_000 });
+  assertStringIncludes(io.out, "waited · snapshot s1 · After Wait · ");
 });
 
 Deno.test("wait --ref --text calls dep with textInElement request", async () => {
@@ -671,10 +708,9 @@ Deno.test("wait --ref --text calls dep with textInElement request", async () => 
     ["wait", "--tab", "4AE7", "--ref", "e5", "--text", "Done"],
     stubDeps({
       app: {
-        wait: (_targetId, request) => {
-          receivedRequest = request;
-          return Promise.resolve();
-        },
+        wait: waitStubResolving((_t, r) => {
+          receivedRequest = r;
+        }),
       },
       stdout: io.stdout,
     }),
@@ -684,9 +720,9 @@ Deno.test("wait --ref --text calls dep with textInElement request", async () => 
     kind: "textInElement",
     target: { ref: "e5" },
     text: "Done",
-    timeoutMs: undefined,
+    timeoutMs: 30_000,
   });
-  assertStringIncludes(io.out, 'found text "Done" in ref e5');
+  assertStringIncludes(io.out, "waited · snapshot s1 · After Wait · ");
 });
 
 Deno.test("wait --selector --text calls dep with textInElement request", async () => {
@@ -696,10 +732,9 @@ Deno.test("wait --selector --text calls dep with textInElement request", async (
     ["wait", "--tab", "4AE7", "--selector", ".result", "--text", "OK"],
     stubDeps({
       app: {
-        wait: (_targetId, request) => {
-          receivedRequest = request;
-          return Promise.resolve();
-        },
+        wait: waitStubResolving((_t, r) => {
+          receivedRequest = r;
+        }),
       },
       stdout: io.stdout,
     }),
@@ -709,26 +744,55 @@ Deno.test("wait --selector --text calls dep with textInElement request", async (
     kind: "textInElement",
     target: { selector: ".result" },
     text: "OK",
-    timeoutMs: undefined,
+    timeoutMs: 30_000,
   });
-  assertStringIncludes(io.out, 'found text "OK" in selector ".result"');
+  assertStringIncludes(io.out, "waited · snapshot s1 · After Wait · ");
 });
 
-Deno.test("wait --timeout passes timeout to dep", async () => {
+Deno.test("wait --timeout overrides the default timeout passed to the dep", async () => {
   let receivedRequest: unknown;
   const code = await runCli(
     ["wait", "--tab", "4AE7", "--text", "OK", "--timeout", "3000"],
     stubDeps({
       app: {
-        wait: (_targetId, request) => {
-          receivedRequest = request;
-          return Promise.resolve();
-        },
+        wait: waitStubResolving((_t, r) => {
+          receivedRequest = r;
+        }),
       },
     }),
   );
   assertEquals(code, 0);
   assertEquals((receivedRequest as { timeoutMs: number }).timeoutMs, 3000);
+});
+
+Deno.test("wait success emits `waited · snapshot ...` pointer", async () => {
+  const io = capture();
+  const yaml = "tree:\n  - heading\n";
+  const expectedBytes = new TextEncoder().encode(yaml).byteLength;
+  const code = await runCli(
+    ["wait", "--tab", "4AE7", "--text", "Ready"],
+    stubDeps({
+      app: {
+        wait: () =>
+          Promise.resolve({
+            snapshot: {
+              yaml,
+              refs: { e1: 1, e2: 2 },
+              lastRefCounter: 2,
+              snapshotId: "s12",
+              title: "Form Loaded",
+              url: "https://example.com/",
+            },
+          }),
+      },
+      stdout: io.stdout,
+    }),
+  );
+  assertEquals(code, 0);
+  assertEquals(
+    io.out,
+    `waited · snapshot s12 · Form Loaded · 2 refs · ${expectedBytes}B\n`,
+  );
 });
 
 Deno.test("wait --ref without --text returns error", async () => {
@@ -761,19 +825,22 @@ Deno.test("wait --ref and --selector returns error", async () => {
   assertStringIncludes(io.err, "not both");
 });
 
-Deno.test("wait reports timeout error from dep", async () => {
+Deno.test("wait reports timeout error from dep (no pointer on failure)", async () => {
   const io = capture();
   const code = await runCli(
     ["wait", "--tab", "4AE7", "--text", "never"],
     stubDeps({
       app: {
-        wait: () => Promise.reject(new Error('timed out waiting for text "never" (5000ms)')),
+        wait: () => Promise.reject(new Error('timed out waiting for text "never" (30000ms)')),
       },
+      stdout: io.stdout,
       stderr: io.stderr,
     }),
   );
   assertEquals(code, 1);
   assertStringIncludes(io.err, "timed out");
+  // Snapshot pointer must NOT appear on timeout — only on success.
+  assertEquals(io.out, "");
 });
 
 // --- upload ---

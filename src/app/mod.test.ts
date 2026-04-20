@@ -730,6 +730,143 @@ Deno.test("wait: text delegates to page.waitForText", async () => {
   assertEquals(waitedText, "hello");
 });
 
+Deno.test("wait: without includeSnapshot returns empty ActionResult and skips snapshot", async () => {
+  let snapshotCalls = 0;
+  const deps = createDeps({
+    createPageConnection: () => Promise.resolve(stubPage()),
+    createSnapshotService: () => ({
+      snapshot: (req) => {
+        snapshotCalls++;
+        return Promise.resolve({
+          yaml: "",
+          refs: {},
+          lastRefCounter: 0,
+          snapshotId: req.snapshotId,
+          title: req.title,
+          url: req.url,
+        });
+      },
+    }),
+  });
+  deps.refsStore.data = { t1: { refs: { e1: 42 }, snapshotId: "s0" } };
+  const app = createScraperApp(deps);
+  const result = await app.wait("t1", { kind: "text", text: "hello" });
+  // No snapshot requested — must not snapshot and must not touch refs.
+  assertEquals(result, {});
+  assertEquals(snapshotCalls, 0);
+  assertEquals(deps.refsStore.data.t1, { refs: { e1: 42 }, snapshotId: "s0" });
+});
+
+Deno.test("wait: includeSnapshot auto-snapshots, persists new refs, and returns the snapshot", async () => {
+  const deps = createDeps({
+    createPageConnection: () => Promise.resolve(stubPage()),
+  });
+  // Pre-existing refs from a prior snapshot on this tab — must be replaced
+  // (not just removed) by the post-wait snapshot.
+  deps.refsStore.data = { t1: { refs: { e1: 42 }, snapshotId: "s0" } };
+  const app = createScraperApp(deps);
+  const result = await app.wait(
+    "t1",
+    { kind: "text", text: "hello" },
+    { includeSnapshot: true },
+  );
+  assertEquals(result.snapshot?.snapshotId, "s1");
+  // Default snapshot-service stub mints one ref per call.
+  assertEquals(deps.refsStore.data.t1, { refs: { e1: 42 }, snapshotId: "s1" });
+});
+
+Deno.test("wait: invalidates refs even when auto-snapshot fails", async () => {
+  const deps = createDeps({
+    createPageConnection: () => Promise.resolve(stubPage()),
+    createSnapshotService: () => ({
+      snapshot: () => Promise.reject(new Error("snapshot failed")),
+    }),
+  });
+  // Pre-existing refs; wait succeeds, page changed, snapshot then fails. Old
+  // refs must not remain resolvable against the new DOM (mirrors the invariant
+  // enforced by `navigate`).
+  deps.refsStore.data = {
+    t1: { refs: { e1: 42 }, snapshotId: "s0" },
+    other: { refs: { e9: 1 }, snapshotId: "s0" },
+  };
+  const app = createScraperApp(deps);
+  await assertRejects(
+    () =>
+      app.wait(
+        "t1",
+        { kind: "text", text: "hello" },
+        { includeSnapshot: true },
+      ),
+    Error,
+    "snapshot failed",
+  );
+  assertEquals(deps.refsStore.data, { other: { refs: { e9: 1 }, snapshotId: "s0" } });
+});
+
+Deno.test("wait: timeout does not snapshot and does not touch refs", async () => {
+  let snapshotCalls = 0;
+  const page = stubPage({
+    waitForText: () => Promise.reject(new Error('timed out waiting for text "never" (30000ms)')),
+  });
+  const deps = createDeps({
+    createPageConnection: () => Promise.resolve(page),
+    createSnapshotService: () => ({
+      snapshot: (req) => {
+        snapshotCalls++;
+        return Promise.resolve({
+          yaml: "",
+          refs: {},
+          lastRefCounter: 0,
+          snapshotId: req.snapshotId,
+          title: req.title,
+          url: req.url,
+        });
+      },
+    }),
+  });
+  deps.refsStore.data = { t1: { refs: { e1: 42 }, snapshotId: "s0" } };
+  const app = createScraperApp(deps);
+  await assertRejects(
+    () =>
+      app.wait(
+        "t1",
+        { kind: "text", text: "never" },
+        { includeSnapshot: true },
+      ),
+    Error,
+    "timed out",
+  );
+  assertEquals(snapshotCalls, 0);
+  // Refs must be untouched on timeout — there is no new state to capture.
+  assertEquals(deps.refsStore.data.t1, { refs: { e1: 42 }, snapshotId: "s0" });
+});
+
+Deno.test("wait: textInElement resolves the target via refs and delegates to page.waitForTextInElement", async () => {
+  let waitedObjectId = "";
+  let waitedText = "";
+  let resolveRefsArg: RefMap | null | undefined;
+  const page = stubPage({
+    waitForTextInElement: (objectId, t) => {
+      waitedObjectId = objectId;
+      waitedText = t;
+      return Promise.resolve();
+    },
+  });
+  const deps = createDeps({
+    createPageConnection: () => Promise.resolve(page),
+    resolveTarget: (_target, _page, refs) => {
+      resolveRefsArg = refs;
+      return Promise.resolve("obj-ref-1");
+    },
+  });
+  deps.refsStore.data = { t1: { refs: { e5: 77 }, snapshotId: "s1" } };
+  const app = createScraperApp(deps);
+  await app.wait("t1", { kind: "textInElement", target: { ref: "e5" }, text: "Done" });
+  assertEquals(waitedObjectId, "obj-ref-1");
+  assertEquals(waitedText, "Done");
+  assertEquals(resolveRefsArg, { e5: 77 });
+});
+
 // ---------------------------------------------------------------------------
 // evaluate
 // ---------------------------------------------------------------------------
