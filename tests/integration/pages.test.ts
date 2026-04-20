@@ -1,6 +1,6 @@
 /** Integration tests for navigation/state behavior with real Chrome. */
 
-import { assert, assertEquals } from "@std/assert";
+import { assert, assertEquals, assertNotEquals, assertStringIncludes } from "@std/assert";
 import { startFixtureServer } from "./fixture-server.ts";
 import { runScraper, startTestRuntime, stopTestRuntime } from "./runtime.ts";
 
@@ -71,6 +71,43 @@ Deno.test("counter-refs advances monotonically across snapshots", async () => {
       refNumbers.every((n) => n > afterFirst),
       `post-second-snapshot refs should be > first counter (${afterFirst}), got ${refNumbers}`,
     );
+  } finally {
+    await fixtures.close();
+    await stopTestRuntime(rt);
+  }
+});
+
+Deno.test("concurrent snapshots allocate distinct artifact ids", async () => {
+  const rt = await startTestRuntime();
+  const fixtures = startFixtureServer();
+  try {
+    await runScraper(
+      ["navigate", "--tab", rt.targetId, fixtures.url("bestseller-table.html")],
+      rt.env,
+    );
+    // Race two snapshots against the same tab. Without the state lock, both
+    // processes read the same `counter`, both mint `sN`, and one overwrites
+    // the other's YAML on disk.
+    const [r1, r2] = await Promise.all([
+      runScraper(["snapshot", "--tab", rt.targetId], rt.env),
+      runScraper(["snapshot", "--tab", rt.targetId], rt.env),
+    ]);
+    assertEquals(r1.code, 0, `snapshot #1 failed: ${r1.stderr}`);
+    assertEquals(r2.code, 0, `snapshot #2 failed: ${r2.stderr}`);
+    const idOf = (out: string) => out.match(/snapshot (s\d+)/)?.[1];
+    const id1 = idOf(r1.stdout);
+    const id2 = idOf(r2.stdout);
+    assert(id1 !== undefined, `snapshot #1 pointer missing: ${r1.stdout}`);
+    assert(id2 !== undefined, `snapshot #2 pointer missing: ${r2.stdout}`);
+    assertNotEquals(id1, id2, "concurrent snapshots must not collide on sN");
+    for (const id of [id1!, id2!]) {
+      const yaml = await Deno.readTextFile(`${rt.tmpHome}/.scraper/${id}.yaml`);
+      assertStringIncludes(
+        yaml,
+        `snapshot: ${id}`,
+        `${id}.yaml must carry its own header, not the racing snapshot's`,
+      );
+    }
   } finally {
     await fixtures.close();
     await stopTestRuntime(rt);

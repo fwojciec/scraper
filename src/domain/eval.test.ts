@@ -43,6 +43,68 @@ Deno.test("scanRefs: ignores property access like obj.$ref('e3')", () => {
   assertEquals(scanRefs(`window.$ref('e3')`), []);
 });
 
+Deno.test("scanRefs: ignores $ref inside a double-quoted string literal", () => {
+  assertEquals(scanRefs(`const s = "$ref(\\"e3\\")"`), []);
+});
+
+Deno.test("scanRefs: ignores $ref inside a single-quoted string literal", () => {
+  assertEquals(scanRefs(`const s = 'not $ref("e3") here'`), []);
+});
+
+Deno.test("scanRefs: ignores $ref inside a template literal", () => {
+  assertEquals(scanRefs('const s = `$ref("e3")`'), []);
+});
+
+Deno.test("scanRefs: extracts $ref from a template literal interpolation", () => {
+  assertEquals(scanRefs('`${$ref("e3").textContent}`'), ["e3"]);
+});
+
+Deno.test("scanRefs: extracts multiple $refs from separate template interpolations", () => {
+  assertEquals(
+    scanRefs('`${$ref("e3").href} - ${$ref("e5").textContent}`'),
+    ["e3", "e5"],
+  );
+});
+
+Deno.test("scanRefs: template literal surrounding text stays string, only ${} is code", () => {
+  // `$ref("e7")` in the bare template text is a string; `$ref("e3")` inside
+  // ${...} is live code. Only e3 should survive.
+  assertEquals(
+    scanRefs('`prefix $ref("e7") ${$ref("e3").value} suffix`'),
+    ["e3"],
+  );
+});
+
+Deno.test("scanRefs: still matches $ref in code after a closed string", () => {
+  assertEquals(scanRefs(`"x"; $ref("e3").click()`), ["e3"]);
+});
+
+Deno.test("scanRefs: regex literal containing // does not swallow following $ref", () => {
+  // The URL-matching regex `/^https?:\/\//` contains a literal `//` that a
+  // naive comment-skipper would treat as a line comment, consuming the rest
+  // of the expression (including the $ref) and causing `$ref is not defined`
+  // at runtime. The scanner must leave regex bodies alone.
+  assertEquals(
+    scanRefs(`/^https?:\\/\\//.test(location.href) ? $ref("e1") : null`),
+    ["e1"],
+  );
+});
+
+Deno.test("scanRefs: regex literal containing /* does not swallow following $ref", () => {
+  // `/\/\*/` exists as a regex matching a literal `/*` — the scanner must not
+  // mistake that substring for the start of a block comment.
+  assertEquals(
+    scanRefs(`/\\/\\*/.test(s); $ref("e4").click()`),
+    ["e4"],
+  );
+});
+
+Deno.test("scanRefs: handles escaped quotes inside strings", () => {
+  // Escaped closing quote must not terminate the string prematurely,
+  // so the $ref literal inside remains string content.
+  assertEquals(scanRefs(`"prefix \\" $ref(\\"e3\\") suffix"`), []);
+});
+
 Deno.test("formatStaleRefError: renders the exact design-doc shape with a ref range", () => {
   const msg = formatStaleRefError(
     "e3",

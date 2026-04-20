@@ -140,6 +140,10 @@ function createDeps(overrides: Partial<ScraperAppDeps> = {}) {
     refCounterStore,
     artifactCounterStore,
     artifactStore,
+    // In-process pass-through — unit tests run sequentially, so serialization
+    // is unobservable here. Concurrency behavior is covered by the
+    // integration tests that spawn parallel CLI subprocesses.
+    withStateLock: (fn) => fn(),
     warn: () => {},
     ...overrides,
   };

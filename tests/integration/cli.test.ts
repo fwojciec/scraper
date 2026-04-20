@@ -708,6 +708,39 @@ Deno.test("CLI: upload with stale --ref reports the canonical stale-ref error", 
   }
 });
 
+Deno.test("CLI: wait --ref with a stale ref reports the canonical stale-ref error", async () => {
+  const rt = await startTestRuntime();
+  const fixtures = startFixtureServer();
+  try {
+    await runScraper(
+      ["navigate", "--tab", rt.targetId, fixtures.url("actions.html")],
+      rt.env,
+    );
+    // e9999 is well above anything the fixture snapshot mints; the stale-ref
+    // check in app.wait must surface the same error text as eval/upload so the
+    // agent's recovery loop (snapshot -> retry) is uniform across commands.
+    const wait = await runScraper(
+      [
+        "wait",
+        "--tab",
+        rt.targetId,
+        "--ref",
+        "e9999",
+        "--text",
+        "anything",
+        "--timeout",
+        "500",
+      ],
+      rt.env,
+    );
+    assertEquals(wait.code, 1);
+    assertStringIncludes(wait.stderr, "ref e9999 is stale");
+  } finally {
+    await fixtures.close();
+    await stopTestRuntime(rt);
+  }
+});
+
 Deno.test("CLI: upload of a non-file input rejects with a clear error", async () => {
   const rt = await startTestRuntime();
   const fixtures = startFixtureServer();
