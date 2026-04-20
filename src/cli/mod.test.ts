@@ -946,24 +946,176 @@ Deno.test("navigate rejects --snapshot with a clear migration message", async ()
   assertStringIncludes(io.err, "auto-snapshots");
 });
 
-Deno.test("navigate rejects --on-dialog with a clear error", async () => {
-  const io = capture();
+Deno.test("navigate --on-dialog accept threads { accept: true } into the app layer", async () => {
+  let receivedOpts: unknown;
   const code = await runCli(
     ["navigate", "--tab", "4AE7", "https://example.com", "--on-dialog", "accept"],
-    stubDeps({ stderr: io.stderr }),
+    stubDeps({
+      app: {
+        navigate: (_targetId, _url, opts) => {
+          receivedOpts = opts;
+          return Promise.resolve({
+            snapshot: {
+              yaml: "",
+              refs: {},
+              lastRefCounter: 0,
+              snapshotId: "s1",
+              title: "",
+              url: "https://example.com/",
+            },
+          });
+        },
+      },
+    }),
   );
-  assertEquals(code, 1);
-  assertStringIncludes(io.err, "--on-dialog is not supported");
+  assertEquals(code, 0);
+  assertEquals(
+    (receivedOpts as { onDialog?: { accept: boolean; promptText?: string } } | undefined)
+      ?.onDialog,
+    { accept: true },
+  );
 });
 
-Deno.test("upload rejects --on-dialog with a clear error", async () => {
+Deno.test("navigate --on-dialog accept:<text> threads promptText", async () => {
+  let receivedOpts: unknown;
+  const code = await runCli(
+    ["navigate", "--tab", "4AE7", "https://example.com", "--on-dialog", "accept:yes"],
+    stubDeps({
+      app: {
+        navigate: (_targetId, _url, opts) => {
+          receivedOpts = opts;
+          return Promise.resolve({
+            snapshot: {
+              yaml: "",
+              refs: {},
+              lastRefCounter: 0,
+              snapshotId: "s1",
+              title: "",
+              url: "https://example.com/",
+            },
+          });
+        },
+      },
+    }),
+  );
+  assertEquals(code, 0);
+  assertEquals(
+    (receivedOpts as { onDialog?: { accept: boolean; promptText?: string } } | undefined)
+      ?.onDialog,
+    { accept: true, promptText: "yes" },
+  );
+});
+
+Deno.test("navigate --on-dialog dismiss threads { accept: false }", async () => {
+  let receivedOpts: unknown;
+  const code = await runCli(
+    ["navigate", "--tab", "4AE7", "https://example.com", "--on-dialog", "dismiss"],
+    stubDeps({
+      app: {
+        navigate: (_targetId, _url, opts) => {
+          receivedOpts = opts;
+          return Promise.resolve({
+            snapshot: {
+              yaml: "",
+              refs: {},
+              lastRefCounter: 0,
+              snapshotId: "s1",
+              title: "",
+              url: "https://example.com/",
+            },
+          });
+        },
+      },
+    }),
+  );
+  assertEquals(code, 0);
+  assertEquals(
+    (receivedOpts as { onDialog?: { accept: boolean; promptText?: string } } | undefined)
+      ?.onDialog,
+    { accept: false },
+  );
+});
+
+Deno.test("navigate rejects an invalid --on-dialog value with a clear error", async () => {
   const io = capture();
   const code = await runCli(
-    ["upload", "--tab", "4AE7", "--ref", "e4", "./photo.jpg", "--on-dialog", "accept"],
+    ["navigate", "--tab", "4AE7", "https://example.com", "--on-dialog", "yeet"],
     stubDeps({ stderr: io.stderr }),
   );
   assertEquals(code, 1);
-  assertStringIncludes(io.err, "--on-dialog is not supported");
+  assertStringIncludes(io.err, "--on-dialog value 'yeet' is invalid");
+});
+
+Deno.test("upload --on-dialog accept threads { accept: true } into the app layer", async () => {
+  let receivedOpts: unknown;
+  const code = await runCli(
+    ["upload", "--tab", "4AE7", "--ref", "e4", "./photo.jpg", "--on-dialog", "accept"],
+    stubDeps({
+      app: {
+        upload: (_tab, _target, _path, opts) => {
+          receivedOpts = opts;
+          return Promise.resolve({});
+        },
+      },
+    }),
+  );
+  assertEquals(code, 0);
+  assertEquals(
+    (receivedOpts as { onDialog?: { accept: boolean; promptText?: string } } | undefined)
+      ?.onDialog,
+    { accept: true },
+  );
+});
+
+Deno.test("eval --on-dialog accept:<text> threads promptText to the app layer", async () => {
+  let receivedOpts: unknown;
+  const code = await runCli(
+    ["eval", "--tab", "4AE7", "1+1", "--on-dialog", "accept:ok"],
+    stubDeps({
+      app: {
+        evaluate: (_tab, _expr, opts) => {
+          receivedOpts = opts;
+          return Promise.resolve({ result: 2 });
+        },
+      },
+    }),
+  );
+  assertEquals(code, 0);
+  assertEquals(
+    (receivedOpts as { onDialog?: { accept: boolean; promptText?: string } } | undefined)
+      ?.onDialog,
+    { accept: true, promptText: "ok" },
+  );
+});
+
+Deno.test("wait --on-dialog dismiss threads { accept: false } to the app layer", async () => {
+  let receivedOpts: unknown;
+  const code = await runCli(
+    ["wait", "--tab", "4AE7", "--text", "hello", "--on-dialog", "dismiss"],
+    stubDeps({
+      app: {
+        wait: (_tab, _req, opts) => {
+          receivedOpts = opts;
+          return Promise.resolve({
+            snapshot: {
+              yaml: "",
+              refs: {},
+              lastRefCounter: 0,
+              snapshotId: "s1",
+              title: "",
+              url: "https://example.com/",
+            },
+          });
+        },
+      },
+    }),
+  );
+  assertEquals(code, 0);
+  assertEquals(
+    (receivedOpts as { onDialog?: { accept: boolean; promptText?: string } } | undefined)
+      ?.onDialog,
+    { accept: false },
+  );
 });
 
 Deno.test("upload reports error from dep", async () => {

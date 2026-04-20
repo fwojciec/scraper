@@ -263,6 +263,58 @@ Deno.test("CLI: back-to-back snapshots produce s1.yaml then s2.yaml with parseab
   }
 });
 
+Deno.test("CLI E2E: onload alert is auto-dismissed and surfaces in the navigate snapshot", async () => {
+  const rt = await startTestRuntime();
+  const fixtures = startFixtureServer();
+  try {
+    const nav = await runScraper(
+      ["navigate", "--tab", rt.targetId, fixtures.url("onload-alert.html")],
+      rt.env,
+    );
+    assertEquals(nav.code, 0, `navigate failed: ${nav.stderr}`);
+
+    const s1 = await Deno.readTextFile(`${rt.tmpHome}/.scraper/s1.yaml`);
+    const parsed = parseYaml(s1) as Record<string, unknown>;
+    assertEquals(parsed.dialog, {
+      type: "alert",
+      message: "onload surprise",
+      handled: "dismiss",
+    });
+  } finally {
+    await fixtures.close();
+    await stopTestRuntime(rt);
+  }
+});
+
+Deno.test("CLI E2E: eval --on-dialog accept:<text> returns the prompt value", async () => {
+  const rt = await startTestRuntime();
+  const fixtures = startFixtureServer();
+  try {
+    // Land on a page with no dialog so the prompt() below is the only one.
+    await runScraper(
+      ["navigate", "--tab", rt.targetId, fixtures.url("actions.html")],
+      rt.env,
+    );
+    const evalResult = await runScraper(
+      [
+        "eval",
+        "--tab",
+        rt.targetId,
+        "prompt('Your name?', '')",
+        "--on-dialog",
+        "accept:Alice",
+      ],
+      rt.env,
+    );
+    assertEquals(evalResult.code, 0, `eval failed: ${evalResult.stderr}`);
+    // prompt() returns the text scraper supplied when accepting.
+    assertStringIncludes(evalResult.stdout, '"Alice"');
+  } finally {
+    await fixtures.close();
+    await stopTestRuntime(rt);
+  }
+});
+
 Deno.test("CLI: screenshot writes shot{N}.png into ~/.scraper using the shared artifact counter", async () => {
   const rt = await startTestRuntime();
   const fixtures = startFixtureServer();

@@ -31,9 +31,14 @@ export interface ScraperApp {
    * + network idle, then auto-snapshot. Returns the new tab's full targetId
    * (so the agent can address it on subsequent commands) and the snapshot.
    */
-  navigateNew(url: string): Promise<NavigateNewResult>;
+  navigateNew(url: string, options?: ActionOptions): Promise<NavigateNewResult>;
   snapshot(targetId: string, options: SnapshotOptions): Promise<SnapshotResult>;
-  evaluate(targetId: string, expression: string): Promise<EvalResult>;
+  /**
+   * Evaluate `expression`. `options` is `ActionOptions` only so the CLI can pass
+   * `--on-dialog` through — `includeSnapshot` is ignored for eval because the
+   * agent explicitly snapshots after a DOM-mutating eval per the design doc.
+   */
+  evaluate(targetId: string, expression: string, options?: ActionOptions): Promise<EvalResult>;
   screenshot(targetId: string): Promise<string>;
   upload(
     targetId: string,

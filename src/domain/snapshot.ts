@@ -6,6 +6,21 @@ export interface SnapshotOptions {
 }
 
 /**
+ * Dialog observed during the command that produced a snapshot. The agent reads
+ * this to learn that a native JS dialog (alert/confirm/prompt/beforeunload)
+ * fired and how scraper responded — so it can choose to retry with
+ * `--on-dialog accept` if the default dismiss was wrong.
+ */
+export interface SnapshotDialog {
+  /** CDP `javascriptDialogOpening` type: "alert" | "confirm" | "prompt" | "beforeunload". */
+  type: string;
+  /** The dialog's message text. */
+  message: string;
+  /** What scraper did with it. */
+  handled: "dismiss" | "accept";
+}
+
+/**
  * Full request sent to the SnapshotService. Extends SnapshotOptions with the
  * session-scoped ref counter and the header fields required by the on-disk
  * snapshot artifact (see Tier B design §Snapshot Artifact).
@@ -28,9 +43,11 @@ export interface SnapshotRequest extends SnapshotOptions {
   title: string;
   /**
    * Dialog observed during the command that produced this snapshot, or null
-   * when no dialog fired. Always null until #50 wires event capture.
+   * when no dialog fired. Always null for plain `scraper snapshot` calls
+   * (which don't execute page JS); set by mutating commands that wrap their
+   * work in `withDialogHandling`.
    */
-  dialog: string | null;
+  dialog: SnapshotDialog | null;
 }
 
 /** Opaque token for a ref label in an ARIA snapshot (e.g. "e1", "e2"). */

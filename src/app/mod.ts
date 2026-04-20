@@ -11,11 +11,13 @@ import { formatStaleRefError, scanRefs } from "../domain/eval.ts";
 import type {
   ActionOptions,
   ActionResult,
+  DialogResponse,
   ElementTarget,
   EvalResult,
   NavigateNewResult,
   RefMap,
   ScraperApp,
+  SnapshotDialog,
   SnapshotService,
   WaitRequest,
 } from "../domain/mod.ts";
@@ -136,6 +138,7 @@ export function createScraperApp(deps: ScraperAppDeps): ScraperApp {
     page: CdpPageService,
     targetId: string,
     opts?: { maxDepth?: number; maxNodes?: number; selector?: string },
+    dialog: SnapshotDialog | null = null,
   ) {
     const snapshotSvc = snapshotServiceFor(page);
     const startingRefCounter = await deps.refCounterStore.read();
@@ -149,7 +152,7 @@ export function createScraperApp(deps: ScraperAppDeps): ScraperApp {
       targetId,
       url,
       title,
-      dialog: null,
+      dialog,
     });
     if (result.lastRefCounter !== startingRefCounter) {
       await deps.refCounterStore.write(result.lastRefCounter);
@@ -170,50 +173,63 @@ export function createScraperApp(deps: ScraperAppDeps): ScraperApp {
   async function postAction(
     page: CdpPageService,
     targetId: string,
-    opts?: ActionOptions,
+    opts: ActionOptions | undefined,
+    dialog: SnapshotDialog | null,
   ): Promise<ActionResult> {
     const timedOut = await page.waitForNetworkIdle();
     if (timedOut) {
       deps.warn("warning: network idle timed out — page may still be loading\n");
     }
     if (opts?.includeSnapshot) {
-      const snapshot = await doSnapshot(page, targetId);
+      const snapshot = await doSnapshot(page, targetId, undefined, dialog);
       return { snapshot };
     }
     return {};
   }
 
   /**
-   * Wrap an action with dialog detection: dismisses any dialog that opens and
-   * reports it as an error. Proper dialog policy support returns in #14.
+   * Wrap an action with dialog detection. Any native JS dialog that opens
+   * during `fn` is responded to according to `response` (default: dismiss) and
+   * surfaced through the returned `getObservedDialog()` so the caller can
+   * thread it into the post-action snapshot. Multiple dialogs in one command
+   * collapse to the first one observed — that's the one the agent needs to
+   * see to understand why the command's effect was unexpected.
+   *
+   * Distinct from the pre-#50 behavior: a dialog is no longer an error. The
+   * agent observes it via the snapshot's `dialog:` field and decides whether
+   * to retry with `--on-dialog accept`.
    */
   async function withDialogHandling<T>(
     page: CdpPageService,
     fn: () => Promise<T>,
-  ): Promise<T> {
-    const dialogErrors: Error[] = [];
+    response: DialogResponse = { accept: false },
+  ): Promise<{ value: T; dialog: SnapshotDialog | null }> {
+    let observed: SnapshotDialog | null = null;
     const handlePromises: Promise<void>[] = [];
 
-    const cleanup = page.onDialog((_type, message) => {
-      handlePromises.push(page.handleDialog(false).catch(() => {}));
-      dialogErrors.push(new Error(`a dialog appeared: "${message}"`));
+    const cleanup = page.onDialog((type, message) => {
+      // Only the first dialog wins for snapshot reporting, but every dialog
+      // still gets handled — otherwise Chrome blocks page execution.
+      if (observed === null) {
+        observed = {
+          type,
+          message,
+          handled: response.accept ? "accept" : "dismiss",
+        };
+      }
+      handlePromises.push(
+        page.handleDialog(response.accept, response.promptText).catch(() => {}),
+      );
     });
 
     try {
-      const result = await fn();
+      const value = await fn();
+      // Wait for in-flight handleDialog calls to settle — `cleanup()` only
+      // unbinds the listener, it doesn't await pending acks.
       await Promise.all(handlePromises);
-      if (dialogErrors.length) throw dialogErrors[0];
-      return result;
+      return { value, dialog: observed };
     } catch (err) {
       await Promise.all(handlePromises).catch(() => {});
-      if (dialogErrors.length) {
-        throw new AggregateError(
-          [err, ...dialogErrors],
-          `${err instanceof Error ? err.message : err}; also: ${
-            dialogErrors.map((e) => e.message).join(", ")
-          }`,
-        );
-      }
       throw err;
     } finally {
       cleanup();
@@ -223,7 +239,7 @@ export function createScraperApp(deps: ScraperAppDeps): ScraperApp {
   return {
     navigate(targetId: string, url: string, opts?: ActionOptions) {
       return withPageConnection(targetId, async (page) => {
-        return await withDialogHandling(page, async () => {
+        const { dialog } = await withDialogHandling(page, async () => {
           await page.navigate(url);
           // Page context changed — invalidate this tab's refs eagerly, before
           // the optional snapshot runs. If snapshotting then fails (AX-tree
@@ -231,18 +247,23 @@ export function createScraperApp(deps: ScraperAppDeps): ScraperApp {
           // of silently resolving against the prior page's DOM. doSnapshot
           // overwrites this file with fresh refs on success.
           await deps.refsStore.remove(targetId);
-          if (opts?.includeSnapshot) {
-            return await postAction(page, targetId, opts);
-          }
+          // Network idle wait sits inside withDialogHandling because pages
+          // commonly fire alert() / confirm() during load, after navigate()
+          // has already resolved. Outside the wrap those dialogs block page
+          // script and never get dismissed.
           const timedOut = await page.waitForNetworkIdle();
           if (timedOut) {
             deps.warn("warning: network idle timed out — page may still be loading\n");
           }
-          return {};
-        });
+        }, opts?.onDialog);
+        if (opts?.includeSnapshot) {
+          const snapshot = await doSnapshot(page, targetId, undefined, dialog);
+          return { snapshot };
+        }
+        return {};
       });
     },
-    async navigateNew(url: string): Promise<NavigateNewResult> {
+    async navigateNew(url: string, opts?: ActionOptions): Promise<NavigateNewResult> {
       const wsUrl = await browserWsUrl();
       const browser = await deps.createBrowserConnection(wsUrl);
       let targetId: string;
@@ -261,15 +282,15 @@ export function createScraperApp(deps: ScraperAppDeps): ScraperApp {
         }
         try {
           return await withPageConnection(targetId, async (page) => {
-            return await withDialogHandling(page, async () => {
+            const { dialog } = await withDialogHandling(page, async () => {
               await page.navigate(url);
               const timedOut = await page.waitForNetworkIdle();
               if (timedOut) {
                 deps.warn("warning: network idle timed out — page may still be loading\n");
               }
-              const snapshot = await doSnapshot(page, targetId);
-              return { targetId, snapshot };
-            });
+            }, opts?.onDialog);
+            const snapshot = await doSnapshot(page, targetId, undefined, dialog);
+            return { targetId, snapshot };
           });
         } catch (err) {
           // Roll back the leaked tab — the targetId was never returned to
@@ -293,23 +314,29 @@ export function createScraperApp(deps: ScraperAppDeps): ScraperApp {
     snapshot(targetId, opts) {
       return withPageConnection(targetId, (page) => doSnapshot(page, targetId, opts));
     },
-    evaluate(targetId: string, expression: string) {
+    evaluate(targetId: string, expression: string, opts?: ActionOptions) {
       return withPageConnection(targetId, async (page): Promise<EvalResult> => {
-        const refNames = scanRefs(expression);
-        if (refNames.length === 0) return await page.evaluate(expression);
-        const refs = (await deps.refsStore.read(targetId)) ?? {};
-        for (const name of refNames) {
-          if (!(name in refs)) {
-            throw new Error(formatStaleRefError(name, targetId, Object.keys(refs)));
+        // Wrap the whole eval path in dialog handling: `eval` often calls
+        // into user JS that triggers `alert()` / `confirm()`, and without
+        // the wrap those dialogs block Runtime.evaluate and we deadlock.
+        const { value } = await withDialogHandling(page, async (): Promise<EvalResult> => {
+          const refNames = scanRefs(expression);
+          if (refNames.length === 0) return await page.evaluate(expression);
+          const refs = (await deps.refsStore.read(targetId)) ?? {};
+          for (const name of refNames) {
+            if (!(name in refs)) {
+              throw new Error(formatStaleRefError(name, targetId, Object.keys(refs)));
+            }
           }
-        }
-        // Resolve each ref once, preserving scan order so stale-ref errors
-        // surface with the first offending ref rather than a late one.
-        const resolved: Record<string, string> = {};
-        for (const name of refNames) {
-          resolved[name] = await page.resolveRef(refs[name], name);
-        }
-        return await page.evaluateWithRefs(expression, resolved);
+          // Resolve each ref once, preserving scan order so stale-ref errors
+          // surface with the first offending ref rather than a late one.
+          const resolved: Record<string, string> = {};
+          for (const name of refNames) {
+            resolved[name] = await page.resolveRef(refs[name], name);
+          }
+          return await page.evaluateWithRefs(expression, resolved);
+        }, opts?.onDialog);
+        return value;
       });
     },
     screenshot(targetId: string) {
@@ -333,28 +360,34 @@ export function createScraperApp(deps: ScraperAppDeps): ScraperApp {
           );
         }
         const objectId = await deps.resolveTarget(target, page, refs);
-        return await withDialogHandling(page, async () => {
+        const { dialog } = await withDialogHandling(page, async () => {
           await page.uploadFile(objectId, filePath);
-          return await postAction(page, targetId, opts);
-        });
+        }, opts?.onDialog);
+        return await postAction(page, targetId, opts, dialog);
       });
     },
     wait(targetId: string, request: WaitRequest, opts?: ActionOptions) {
       return withPageConnection(targetId, async (page): Promise<ActionResult> => {
-        switch (request.kind) {
-          case "textInElement": {
-            const refs = await deps.refsStore.read(targetId);
-            const objectId = await deps.resolveTarget(request.target, page, refs);
-            await page.waitForTextInElement(objectId, request.text, request.timeoutMs);
-            break;
+        // Wrap the wait itself in dialog handling: the element being waited for
+        // may appear alongside a dialog (e.g. click that triggered the wait also
+        // fires alert()). Without the wrap the dialog blocks page script and
+        // the wait ends up timing out even though the target condition is met.
+        const { dialog } = await withDialogHandling(page, async () => {
+          switch (request.kind) {
+            case "textInElement": {
+              const refs = await deps.refsStore.read(targetId);
+              const objectId = await deps.resolveTarget(request.target, page, refs);
+              await page.waitForTextInElement(objectId, request.text, request.timeoutMs);
+              break;
+            }
+            case "text":
+              await page.waitForText(request.text, request.timeoutMs);
+              break;
+            case "selector":
+              await page.waitForSelector(request.selector, request.timeoutMs);
+              break;
           }
-          case "text":
-            await page.waitForText(request.text, request.timeoutMs);
-            break;
-          case "selector":
-            await page.waitForSelector(request.selector, request.timeoutMs);
-            break;
-        }
+        }, opts?.onDialog);
         if (!opts?.includeSnapshot) return {};
         // Wait succeeded — the page likely changed (new element / text). Drop
         // this tab's refs eagerly, before the network-idle gate and snapshot,
@@ -366,7 +399,7 @@ export function createScraperApp(deps: ScraperAppDeps): ScraperApp {
         // a larger async update (e.g., a results container appears before its
         // contents finish loading), so snapshotting immediately could capture
         // an intermediate DOM whose refs go stale by the next command.
-        return await postAction(page, targetId, opts);
+        return await postAction(page, targetId, opts, dialog);
       });
     },
   };

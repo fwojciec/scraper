@@ -1,6 +1,12 @@
 // Adapter: CLI (Deno.args). Direct CDP operations, no HTTP server.
 
-import type { ElementTarget, ScraperApp, SnapshotResult, WaitRequest } from "../domain/mod.ts";
+import type {
+  DialogResponse,
+  ElementTarget,
+  ScraperApp,
+  SnapshotResult,
+  WaitRequest,
+} from "../domain/mod.ts";
 
 /** A single page tab as returned by `listTabs` — only page-type targets. */
 export interface TabInfo {
@@ -97,6 +103,31 @@ function flagNumber(
 }
 
 /**
+ * Parse the `--on-dialog` flag per the Tier B design (§Dialog Handling).
+ * Accepted values:
+ *   - `accept`           → accept with no prompt text
+ *   - `accept:<text>`    → accept and send `<text>` as prompt value
+ *   - `dismiss`          → explicit dismiss (same as the implicit default)
+ * Omitting the flag returns `[undefined, undefined]` so the app layer falls
+ * back to its dismiss-by-default behavior.
+ */
+function parseOnDialog(
+  flags: Record<string, string | true>,
+): [DialogResponse | undefined, string | undefined] {
+  if (!("on-dialog" in flags)) return [undefined, undefined];
+  const raw = flags["on-dialog"];
+  if (raw === true || raw === "") {
+    return [undefined, "--on-dialog requires a value: accept | accept:<text> | dismiss"];
+  }
+  if (raw === "dismiss") return [{ accept: false }, undefined];
+  if (raw === "accept") return [{ accept: true }, undefined];
+  if (raw.startsWith("accept:")) {
+    return [{ accept: true, promptText: raw.slice("accept:".length) }, undefined];
+  }
+  return [undefined, `--on-dialog value '${raw}' is invalid; use accept | accept:<text> | dismiss`];
+}
+
+/**
  * Resolve `--tab <input>` from the parsed flags to the canonical full targetId.
  * Returns `[id, undefined]` on success, `[undefined, errorText]` on failure.
  * All error text (missing flag, no match, ambiguous prefix) comes from
@@ -142,8 +173,9 @@ async function handleNavigate(args: string[], deps: CliDeps): Promise<number> {
     return 1;
   }
 
-  if ("on-dialog" in flags) {
-    deps.stderr("error: --on-dialog is not supported in this build\n");
+  const [onDialog, dialogErr] = parseOnDialog(flags);
+  if (dialogErr) {
+    deps.stderr(`error: ${dialogErr}\n`);
     return 1;
   }
 
@@ -172,7 +204,7 @@ async function handleNavigate(args: string[], deps: CliDeps): Promise<number> {
 
   if (isNew) {
     try {
-      const result = await deps.app.navigateNew(url);
+      const result = await deps.app.navigateNew(url, { onDialog });
       // Full id first so the agent can copy a prefix to use on the next call.
       deps.stdout(`${result.targetId}\n`);
       deps.stdout(snapshotPointer(result.snapshot) + "\n");
@@ -192,7 +224,10 @@ async function handleNavigate(args: string[], deps: CliDeps): Promise<number> {
   try {
     // Navigate auto-snapshots per the Tier B design (§Auto-snapshot rule):
     // page context changed, agent needs fresh refs.
-    const result = await deps.app.navigate(targetId!, url, { includeSnapshot: true });
+    const result = await deps.app.navigate(targetId!, url, {
+      includeSnapshot: true,
+      onDialog,
+    });
     if (!result.snapshot) {
       // Defensive: app.navigate must always return a snapshot when we ask for
       // one. If a future refactor breaks that contract, fail loudly rather
@@ -271,6 +306,12 @@ async function handleEval(args: string[], deps: CliDeps): Promise<number> {
     return 1;
   }
 
+  const [onDialog, dialogErr] = parseOnDialog(flags);
+  if (dialogErr) {
+    deps.stderr(`error: ${dialogErr}\n`);
+    return 1;
+  }
+
   const [targetId, tabErr] = await resolveTabFlag(flags, deps);
   if (tabErr) {
     deps.stderr(`error: ${tabErr}\n`);
@@ -278,7 +319,7 @@ async function handleEval(args: string[], deps: CliDeps): Promise<number> {
   }
 
   try {
-    const { result } = await deps.app.evaluate(targetId!, expression);
+    const { result } = await deps.app.evaluate(targetId!, expression, { onDialog });
     deps.stdout(JSON.stringify(result, null, 2) + "\n");
     return 0;
   } catch (err) {
@@ -345,6 +386,12 @@ async function handleWait(args: string[], deps: CliDeps): Promise<number> {
     return 1;
   }
 
+  const [onDialog, dialogErr] = parseOnDialog(flags);
+  if (dialogErr) {
+    deps.stderr(`error: ${dialogErr}\n`);
+    return 1;
+  }
+
   const [targetId, tabErr] = await resolveTabFlag(flags, deps);
   if (tabErr) {
     deps.stderr(`error: ${tabErr}\n`);
@@ -366,7 +413,10 @@ async function handleWait(args: string[], deps: CliDeps): Promise<number> {
     // Wait auto-snapshots on success per the Tier B design (§Auto-snapshot rule):
     // the page changed enough for the wait to succeed, so the agent needs fresh
     // refs. CLI always passes includeSnapshot: true.
-    const result = await deps.app.wait(targetId!, request, { includeSnapshot: true });
+    const result = await deps.app.wait(targetId!, request, {
+      includeSnapshot: true,
+      onDialog,
+    });
     if (!result.snapshot) {
       // Defensive: app.wait must return a snapshot when asked. Fail loudly
       // rather than silently dropping the pointer.
@@ -398,8 +448,9 @@ async function handleUpload(args: string[], deps: CliDeps): Promise<number> {
     return 1;
   }
 
-  if ("on-dialog" in flags) {
-    deps.stderr("error: --on-dialog is not supported in this build\n");
+  const [onDialog, dialogErr] = parseOnDialog(flags);
+  if (dialogErr) {
+    deps.stderr(`error: ${dialogErr}\n`);
     return 1;
   }
 
@@ -421,7 +472,7 @@ async function handleUpload(args: string[], deps: CliDeps): Promise<number> {
   }
 
   try {
-    await deps.app.upload(targetId!, target!, filePath);
+    await deps.app.upload(targetId!, target!, filePath, { onDialog });
     const label = "ref" in target! ? `ref ${target!.ref}` : `selector "${target!.selector}"`;
     deps.stdout(`uploaded to ${label}\n`);
     return 0;

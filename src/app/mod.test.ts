@@ -401,6 +401,122 @@ Deno.test("navigateNew: warns when rollback closeTarget itself fails (preserves 
   assertEquals(warnings[0].includes("target gone"), true);
 });
 
+Deno.test("navigate: dialog fired during load is dismissed and threaded into auto-snapshot", async () => {
+  let dialogTrigger:
+    | ((type: string, message: string, defaultPrompt: string) => void)
+    | null = null;
+  let receivedRequest: SnapshotRequest | undefined;
+  const page = stubPage({
+    onDialog: (handler) => {
+      dialogTrigger = handler;
+      return () => {
+        dialogTrigger = null;
+      };
+    },
+    // Simulate an onload alert that fires between navigate() and network idle.
+    navigate: () => {
+      dialogTrigger?.("alert", "onload boom", "");
+      return Promise.resolve();
+    },
+  });
+  const deps = createDeps({
+    createPageConnection: () => Promise.resolve(page),
+    createSnapshotService: () => ({
+      snapshot: (req) => {
+        receivedRequest = req;
+        return Promise.resolve({
+          yaml: "",
+          refs: {},
+          lastRefCounter: 0,
+          snapshotId: req.snapshotId,
+          title: req.title,
+          url: req.url,
+        });
+      },
+    }),
+  });
+  const app = createScraperApp(deps);
+  await app.navigate("t1", "https://example.com", { includeSnapshot: true });
+  assertEquals(receivedRequest?.dialog, {
+    type: "alert",
+    message: "onload boom",
+    handled: "dismiss",
+  });
+});
+
+Deno.test("navigate: onDialog accept uses accept and routes to CDP handleDialog", async () => {
+  let dialogTrigger:
+    | ((type: string, message: string, defaultPrompt: string) => void)
+    | null = null;
+  const handled: Array<{ accept: boolean; promptText?: string }> = [];
+  const page = stubPage({
+    onDialog: (handler) => {
+      dialogTrigger = handler;
+      return () => {
+        dialogTrigger = null;
+      };
+    },
+    handleDialog: (accept, promptText) => {
+      handled.push({ accept, promptText });
+      return Promise.resolve();
+    },
+    navigate: () => {
+      dialogTrigger?.("confirm", "Continue?", "");
+      return Promise.resolve();
+    },
+  });
+  const deps = createDeps({ createPageConnection: () => Promise.resolve(page) });
+  const app = createScraperApp(deps);
+  await app.navigate("t1", "https://example.com", { onDialog: { accept: true } });
+  assertEquals(handled, [{ accept: true, promptText: undefined }]);
+});
+
+Deno.test("navigate: only the first dialog is captured for the snapshot; every one is handled", async () => {
+  let dialogTrigger:
+    | ((type: string, message: string, defaultPrompt: string) => void)
+    | null = null;
+  const handled: Array<{ accept: boolean; promptText?: string }> = [];
+  let receivedRequest: SnapshotRequest | undefined;
+  const page = stubPage({
+    onDialog: (handler) => {
+      dialogTrigger = handler;
+      return () => {
+        dialogTrigger = null;
+      };
+    },
+    handleDialog: (accept, promptText) => {
+      handled.push({ accept, promptText });
+      return Promise.resolve();
+    },
+    navigate: () => {
+      dialogTrigger?.("alert", "first", "");
+      dialogTrigger?.("alert", "second", "");
+      return Promise.resolve();
+    },
+  });
+  const deps = createDeps({
+    createPageConnection: () => Promise.resolve(page),
+    createSnapshotService: () => ({
+      snapshot: (req) => {
+        receivedRequest = req;
+        return Promise.resolve({
+          yaml: "",
+          refs: {},
+          lastRefCounter: 0,
+          snapshotId: req.snapshotId,
+          title: req.title,
+          url: req.url,
+        });
+      },
+    }),
+  });
+  const app = createScraperApp(deps);
+  await app.navigate("t1", "https://example.com", { includeSnapshot: true });
+  // First dialog wins for reporting; both were still handled so Chrome is not blocked.
+  assertEquals(receivedRequest?.dialog?.message, "first");
+  assertEquals(handled.length, 2);
+});
+
 Deno.test("navigate: invalidates refs even when auto-snapshot fails", async () => {
   const deps = createDeps({
     createPageConnection: () => Promise.resolve(stubPage()),
@@ -668,16 +784,21 @@ Deno.test("upload: returns snapshot when includeSnapshot set", async () => {
   );
 });
 
-Deno.test("upload: dialog appearance during upload aggregates as error", async () => {
+Deno.test("upload: dialog that fires during upload is dismissed, not thrown", async () => {
   let dialogTrigger:
     | ((type: string, message: string, defaultPrompt: string) => void)
     | null = null;
+  const handled: Array<{ accept: boolean; promptText?: string }> = [];
   const page = stubPage({
     onDialog: (handler) => {
       dialogTrigger = handler;
       return () => {
         dialogTrigger = null;
       };
+    },
+    handleDialog: (accept, promptText) => {
+      handled.push({ accept, promptText });
+      return Promise.resolve();
     },
     uploadFile: () => {
       dialogTrigger?.("alert", "boom", "");
@@ -689,11 +810,87 @@ Deno.test("upload: dialog appearance during upload aggregates as error", async (
   });
   deps.refsStore.data = { t1: { refs: { e1: 42 }, snapshotId: "s1" } };
   const app = createScraperApp(deps);
-  await assertRejects(
-    () => app.upload("t1", { ref: "e1" }, "/tmp/x"),
-    Error,
-    "a dialog appeared",
+  // No error — dialog is a normal occurrence now. Default policy dismisses.
+  await app.upload("t1", { ref: "e1" }, "/tmp/x");
+  assertEquals(handled, [{ accept: false, promptText: undefined }]);
+});
+
+Deno.test("upload: includeSnapshot surfaces the observed dialog in the snapshot", async () => {
+  let dialogTrigger:
+    | ((type: string, message: string, defaultPrompt: string) => void)
+    | null = null;
+  let receivedRequest: SnapshotRequest | undefined;
+  const page = stubPage({
+    onDialog: (handler) => {
+      dialogTrigger = handler;
+      return () => {
+        dialogTrigger = null;
+      };
+    },
+    uploadFile: () => {
+      dialogTrigger?.("alert", "unsaved changes", "");
+      return Promise.resolve();
+    },
+  });
+  const deps = createDeps({
+    createPageConnection: () => Promise.resolve(page),
+    createSnapshotService: () => ({
+      snapshot: (req) => {
+        receivedRequest = req;
+        return Promise.resolve({
+          yaml: "",
+          refs: {},
+          lastRefCounter: 0,
+          snapshotId: req.snapshotId,
+          title: req.title,
+          url: req.url,
+        });
+      },
+    }),
+  });
+  deps.refsStore.data = { t1: { refs: { e1: 42 }, snapshotId: "s1" } };
+  const app = createScraperApp(deps);
+  await app.upload("t1", { ref: "e1" }, "/tmp/x", { includeSnapshot: true });
+  assertEquals(receivedRequest?.dialog, {
+    type: "alert",
+    message: "unsaved changes",
+    handled: "dismiss",
+  });
+});
+
+Deno.test("upload: onDialog accept routes through CDP handleDialog with promptText", async () => {
+  let dialogTrigger:
+    | ((type: string, message: string, defaultPrompt: string) => void)
+    | null = null;
+  const handled: Array<{ accept: boolean; promptText?: string }> = [];
+  const page = stubPage({
+    onDialog: (handler) => {
+      dialogTrigger = handler;
+      return () => {
+        dialogTrigger = null;
+      };
+    },
+    handleDialog: (accept, promptText) => {
+      handled.push({ accept, promptText });
+      return Promise.resolve();
+    },
+    uploadFile: () => {
+      dialogTrigger?.("prompt", "Your name?", "");
+      return Promise.resolve();
+    },
+  });
+  const deps = createDeps({
+    createPageConnection: () => Promise.resolve(page),
+  });
+  deps.refsStore.data = { t1: { refs: { e1: 42 }, snapshotId: "s1" } };
+  const app = createScraperApp(deps);
+  await app.upload(
+    "t1",
+    { ref: "e1" },
+    "/tmp/x",
+    { onDialog: { accept: true, promptText: "Alice" } },
   );
+  assertEquals(handled, [{ accept: true, promptText: "Alice" }]);
 });
 
 Deno.test("upload: stale --ref produces the canonical stale-ref error (no refs file)", async () => {
@@ -884,6 +1081,74 @@ Deno.test("wait: timeout does not snapshot and does not touch refs", async () =>
   assertEquals(deps.refsStore.data.t1, { refs: { e1: 42 }, snapshotId: "s0" });
 });
 
+Deno.test("wait: dialog during wait is dismissed and surfaced in the auto-snapshot", async () => {
+  let dialogTrigger:
+    | ((type: string, message: string, defaultPrompt: string) => void)
+    | null = null;
+  let receivedRequest: SnapshotRequest | undefined;
+  const page = stubPage({
+    onDialog: (handler) => {
+      dialogTrigger = handler;
+      return () => {
+        dialogTrigger = null;
+      };
+    },
+    waitForText: () => {
+      dialogTrigger?.("alert", "wait-time alert", "");
+      return Promise.resolve();
+    },
+  });
+  const deps = createDeps({
+    createPageConnection: () => Promise.resolve(page),
+    createSnapshotService: () => ({
+      snapshot: (req) => {
+        receivedRequest = req;
+        return Promise.resolve({
+          yaml: "",
+          refs: {},
+          lastRefCounter: 0,
+          snapshotId: req.snapshotId,
+          title: req.title,
+          url: req.url,
+        });
+      },
+    }),
+  });
+  const app = createScraperApp(deps);
+  await app.wait(
+    "t1",
+    { kind: "text", text: "hello" },
+    { includeSnapshot: true },
+  );
+  assertEquals(receivedRequest?.dialog, {
+    type: "alert",
+    message: "wait-time alert",
+    handled: "dismiss",
+  });
+});
+
+Deno.test("wait: dialog handler is installed before the wait call runs", async () => {
+  // Regression guard: wait previously ran outside withDialogHandling, so an
+  // alert fired by the same click that triggered the waited-on condition
+  // would block the page indefinitely.
+  let handlerInstalledBeforeWait = false;
+  let handlerInstalled = false;
+  const page = stubPage({
+    onDialog: (_handler) => {
+      handlerInstalled = true;
+      return () => {};
+    },
+    waitForSelector: () => {
+      handlerInstalledBeforeWait = handlerInstalled;
+      return Promise.resolve();
+    },
+  });
+  const deps = createDeps({ createPageConnection: () => Promise.resolve(page) });
+  const app = createScraperApp(deps);
+  await app.wait("t1", { kind: "selector", selector: "#ok" });
+  assertEquals(handlerInstalledBeforeWait, true);
+});
+
 Deno.test("wait: textInElement resolves the target via refs and delegates to page.waitForTextInElement", async () => {
   let waitedObjectId = "";
   let waitedText = "";
@@ -913,6 +1178,61 @@ Deno.test("wait: textInElement resolves the target via refs and delegates to pag
 // ---------------------------------------------------------------------------
 // evaluate
 // ---------------------------------------------------------------------------
+
+Deno.test("evaluate: dialog fired during eval is dismissed by default", async () => {
+  let dialogTrigger:
+    | ((type: string, message: string, defaultPrompt: string) => void)
+    | null = null;
+  const handled: Array<{ accept: boolean; promptText?: string }> = [];
+  const page = stubPage({
+    onDialog: (handler) => {
+      dialogTrigger = handler;
+      return () => {
+        dialogTrigger = null;
+      };
+    },
+    handleDialog: (accept, promptText) => {
+      handled.push({ accept, promptText });
+      return Promise.resolve();
+    },
+    evaluate: () => {
+      dialogTrigger?.("alert", "from eval", "");
+      return Promise.resolve({ result: 7 });
+    },
+  });
+  const deps = createDeps({ createPageConnection: () => Promise.resolve(page) });
+  const app = createScraperApp(deps);
+  const { result } = await app.evaluate("t1", "1+1");
+  assertEquals(result, 7);
+  assertEquals(handled, [{ accept: false, promptText: undefined }]);
+});
+
+Deno.test("evaluate: onDialog accept passes through to CDP handleDialog", async () => {
+  let dialogTrigger:
+    | ((type: string, message: string, defaultPrompt: string) => void)
+    | null = null;
+  const handled: Array<{ accept: boolean; promptText?: string }> = [];
+  const page = stubPage({
+    onDialog: (handler) => {
+      dialogTrigger = handler;
+      return () => {
+        dialogTrigger = null;
+      };
+    },
+    handleDialog: (accept, promptText) => {
+      handled.push({ accept, promptText });
+      return Promise.resolve();
+    },
+    evaluate: () => {
+      dialogTrigger?.("prompt", "pick one", "");
+      return Promise.resolve({ result: null });
+    },
+  });
+  const deps = createDeps({ createPageConnection: () => Promise.resolve(page) });
+  const app = createScraperApp(deps);
+  await app.evaluate("t1", "1+1", { onDialog: { accept: true, promptText: "yes" } });
+  assertEquals(handled, [{ accept: true, promptText: "yes" }]);
+});
 
 Deno.test("evaluate: no $ref falls through to page.evaluate with the raw expression", async () => {
   let receivedExpr = "";

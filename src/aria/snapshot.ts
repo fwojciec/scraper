@@ -1,6 +1,7 @@
 /** SnapshotService: uses CDP Accessibility tree to build ARIA snapshots. */
 
 import type { SnapshotService } from "../domain/browser.ts";
+import type { SnapshotDialog } from "../domain/snapshot.ts";
 import { type AccessibilityNode, transformAXTree } from "./tree.ts";
 import { renderYaml } from "./render.ts";
 
@@ -8,6 +9,21 @@ import { renderYaml } from "./render.ts";
 export interface SnapshotDeps {
   getFullAXTree(): Promise<AccessibilityNode[]>;
   resolveSelector(selector: string): Promise<number>;
+}
+
+/**
+ * Render the snapshot's `dialog:` header field. Block style when present so the
+ * agent can grep individual subkeys; the bare scalar `null` when no dialog
+ * fired during the command that produced the snapshot.
+ */
+function renderDialog(dialog: SnapshotDialog | null): string {
+  if (dialog === null) return "dialog: null";
+  return [
+    "dialog:",
+    `  type: ${dialog.type}`,
+    `  message: ${yamlString(dialog.message)}`,
+    `  handled: ${dialog.handled}`,
+  ].join("\n");
 }
 
 function yamlString(s: string): string {
@@ -58,7 +74,7 @@ export function createSnapshotService(deps: SnapshotDeps): SnapshotService {
         `targetId: ${request.targetId}`,
         `url: ${yamlString(request.url)}`,
         `title: ${yamlString(request.title)}`,
-        `dialog: ${request.dialog === null ? "null" : yamlString(request.dialog)}`,
+        renderDialog(request.dialog),
       ].join("\n");
 
       const treeBody = renderYaml(nodes, { baseIndent: 2 });

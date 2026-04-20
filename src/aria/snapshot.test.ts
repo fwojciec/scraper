@@ -247,13 +247,39 @@ Deno.test("snapshot YAML quotes url and title with special characters", async ()
   assertEquals(parsed.title, 'Report: "Q3"');
 });
 
-Deno.test("snapshot YAML surfaces dialog text when provided", async () => {
+Deno.test("snapshot YAML surfaces dialog object when provided", async () => {
   const svc = createSnapshotService(mockDeps([]));
   const result = await svc.snapshot(req({
-    dialog: "Unsaved changes — leave?",
+    dialog: { type: "alert", message: "Unsaved changes — leave?", handled: "dismiss" },
   }));
   const parsed = parseYaml(result.yaml) as Record<string, unknown>;
-  assertEquals(parsed.dialog, "Unsaved changes — leave?");
+  assertEquals(parsed.dialog, {
+    type: "alert",
+    message: "Unsaved changes — leave?",
+    handled: "dismiss",
+  });
+});
+
+Deno.test("snapshot YAML records `accept` when scraper accepted the dialog", async () => {
+  const svc = createSnapshotService(mockDeps([]));
+  const result = await svc.snapshot(req({
+    dialog: { type: "prompt", message: "Your name?", handled: "accept" },
+  }));
+  const parsed = parseYaml(result.yaml) as Record<string, unknown>;
+  assertEquals(parsed.dialog, { type: "prompt", message: "Your name?", handled: "accept" });
+});
+
+Deno.test("snapshot YAML escapes special characters in the dialog message", async () => {
+  const svc = createSnapshotService(mockDeps([]));
+  const result = await svc.snapshot(req({
+    dialog: { type: "confirm", message: 'He said "no" — really.', handled: "dismiss" },
+  }));
+  const parsed = parseYaml(result.yaml) as Record<string, unknown>;
+  assertEquals(parsed.dialog, {
+    type: "confirm",
+    message: 'He said "no" — really.',
+    handled: "dismiss",
+  });
 });
 
 Deno.test("snapshot YAML renders targetId as canonical 32-hex string", async () => {
