@@ -38,9 +38,15 @@ real user Chrome instances. Text-first, not pixel-first.
 
 ### Design rules derived from the thesis
 
-1. **No hidden state.** Everything the CLI does is fully described by its
-   arguments. No "active tab" to fall out of sync with. No implicit "last
-   snapshot." Agent passes what it wants to act on.
+1. **No hidden tab-selection state.** Scraper does not remember "which tab"
+   across commands. The agent names its tab on every call. Scraper does persist
+   two things — listed explicitly in [State and Filesystem](#state-and-filesystem)
+   so there are no surprises: (a) artifact files (snapshots, screenshots, both
+   on disk for the agent to `Read`), and (b) a per-tab ref map
+   (`refs.<targetId>.json`) that scopes snapshot-minted refs to the tab they
+   came from and gets overwritten by that tab's next snapshot. Refs model how
+   the browser works — a node in a page's DOM — not a scraper-specific layer.
+   There is no "active target," no implicit cross-command tab context.
 2. **No magic target discovery.** Scraper does not guess which tab you mean.
    The agent calls `scraper tabs`, picks one, and passes the targetId.
 3. **No semantic-action wrapping.** There is no `click` command that hides
@@ -78,14 +84,19 @@ and drop, network interception, cookie manipulation.
 
 ## Command Surface (7 commands)
 
-Every command below except `tabs` requires `--tab <targetId>`. `targetId` is Chrome's
-CDP target identifier; the agent learns them from `scraper tabs` output. Unique
-prefixes are accepted (Docker-style), so an 8-character prefix is typically enough.
+Every command below requires `--tab <targetId>` **except** `tabs` (lists, no target
+needed) and `navigate --new <url>` (creates a new tab, so there's nothing to address
+yet). `targetId` is Chrome's CDP target identifier, a 32-hex-character string. The
+agent learns them from `scraper tabs` output and passes them literally. Unique
+prefixes are accepted on input for convenience, but `scraper tabs` prints the **full**
+targetId for each tab to guarantee the agent can always address any tab
+unambiguously.
 
 | Command | Purpose | Auto-snapshot? |
 |---|---|---|
-| `scraper tabs` | List all page tabs with truncated target IDs, URLs, titles. No `--tab`. | No |
-| `scraper navigate --tab <id> <url>` | Navigate that tab. `--new <url>` (no `--tab`) creates a new tab via `Target.createTarget` and prints its targetId. Waits for network idle. | **Yes** |
+| `scraper tabs` | List all page tabs with full targetIds, URLs, titles. No `--tab`. | No |
+| `scraper navigate --tab <id> <url>` | Navigate that tab. Waits for network idle. | **Yes** |
+| `scraper navigate --new <url>` | Create a new tab via `Target.createTarget` and print its targetId. No `--tab` (there's nothing to address). | **Yes** |
 | `scraper snapshot --tab <id>` | Capture ARIA tree + dialog state for that tab. Writes `refs.<id>.json`. | — (it *is* the snapshot) |
 | `scraper eval --tab <id> '<expr>'` | Evaluate JS in that tab's page with `$ref(id)` helper bound. | **No** |
 | `scraper wait --tab <id> ...` | Wait for selector, text, or text-in-ref in that tab. | **Yes** on success |
@@ -94,10 +105,10 @@ prefixes are accepted (Docker-style), so an 8-character prefix is typically enou
 
 ### Auto-snapshot rule (asymmetric)
 
-Commands that change page context (`navigate`, `tab`, `wait` on success) auto-snapshot
+Commands that change page context (`navigate`, `wait` on success) auto-snapshot
 and return a one-line pointer to stdout. `eval` and `upload` do **not** auto-snapshot
-— the agent calls `scraper snapshot` explicitly after DOM-mutating evals or uploads
-that change the form.
+— the agent calls `scraper snapshot --tab <id>` explicitly after DOM-mutating evals
+or uploads that change the form.
 
 Rationale: an eval is often a read (`document.title`, `el.value`). Auto-snapshotting
 reads would invalidate the agent's current refs pointlessly (see [Handle Scheme](#handle-scheme)).
@@ -110,8 +121,8 @@ Example:
 
 ```
 $ scraper tabs
-4AE7B2C9  https://memberforms.uhc.com/...   "Direct Medical Reimbursement"
-9F3BA1C2  https://mail.google.com/...        "Inbox"
+4AE7B2C9E1D4F0A2B8C6E1F3A5D9B7C2  https://memberforms.uhc.com/...   "Direct Medical Reimbursement"
+9F3BA1C2D7E4F1A8B5C3E9F6A4D2B0C5  https://mail.google.com/...        "Inbox"
 
 $ scraper navigate --tab 4AE7B2C9 https://memberforms.uhc.com/DirectMedicalReimbursement.html
 navigated · snapshot s47 · "Direct Medical Reimbursement" · 14 refs · 8421B
@@ -138,9 +149,12 @@ subsumed by `eval` or removed.
 ### Tabs — no refs, use targetIds directly
 
 Tabs are identified by Chrome's CDP `targetId` (32-hex-char strings). No short-ref
-aliasing, no `t1`/`t2` mapping file to maintain. `scraper tabs` prints the truncated
-first-8-char prefix for readability; the CLI accepts any unique prefix when parsing
-`--tab <id>`. Docker-style: short on display, prefix-tolerant on input.
+aliasing, no `t1`/`t2` mapping file to maintain. `scraper tabs` prints the **full**
+targetId for each tab so the agent can always address any tab unambiguously; the CLI
+accepts any unique prefix on input for convenience. If two tabs share the prefix the
+agent tried, scraper errors with "ambiguous prefix, matches N tabs; use more
+characters or the full targetId from `scraper tabs`." Full IDs on display, prefix-
+tolerant on input.
 
 ### Elements — short monotonic refs, per-tab state
 
@@ -299,7 +313,7 @@ Possible future additions (deferred until observed need):
 - `--on-dialog accept:<text>` — accept with prompt text
 - `--on-dialog dismiss` — explicit dismiss (same as default)
 
-Available on `navigate`, `eval`, `wait`, `tab`, `upload`. No discriminated-union
+Available on `navigate`, `eval`, `wait`, `upload`. No discriminated-union
 `DialogPolicy` type threaded through the domain. One flag, local to the CLI layer.
 
 ## State and Filesystem
