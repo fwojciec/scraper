@@ -14,10 +14,13 @@ submit, or read form state, write raw JS with `eval` and let `$ref` resolve elem
 Every command opens a fresh CDP connection, does its work, closes. There is no persistent session
 and no "active tab."
 
-Chrome must already be running with remote debugging enabled. If `scraper tabs` errors with "could
-not read DevToolsActivePort," the user needs to start Chrome with `--remote-debugging-port=0` (or
-the Canary channel the repo is configured for). Tell them that and stop — do not try to launch
-Chrome yourself.
+Chrome must already be running with remote debugging enabled. If `scraper tabs` errors with
+"DevToolsActivePort not found," the user needs to start Chrome with `--remote-debugging-port=0`.
+Tell them that and stop — do not try to launch Chrome yourself.
+
+Scraper reads `DevToolsActivePort` from the Chrome user data directory. Default channel is stable;
+override with the `SCRAPER_CHROME_CHANNEL` env var (`beta` | `canary` | `dev` | `stable`) or point
+at a custom directory with `SCRAPER_USER_DATA_DIR`.
 
 ## Standard opening move
 
@@ -51,6 +54,10 @@ Every command except `tabs` and `navigate --new` requires `--tab <id>`.
 | `scraper wait --tab <id> ...`               | Wait for selector / text / text-in-ref. Default 30s.         | **Yes** on ok   |
 | `scraper upload --tab <id> --ref eN <path>` | `DOM.setFileInputFiles` — works on `<input type=file>` only. | **No**          |
 | `scraper screenshot --tab <id>`             | Viewport PNG → `~/.scraper/shot{N}.png`. Prints the path.    | No              |
+
+`snapshot` accepts optional scoping flags for large pages: `--selector "<css>"` restricts the tree
+to that subtree, `--max-depth N` caps tree depth, `--max-nodes N` caps total nodes. `upload` accepts
+`--selector "<css>"` as an alternative to `--ref` when you already know the CSS path.
 
 ## Auto-snapshot rule (asymmetric — this matters)
 
