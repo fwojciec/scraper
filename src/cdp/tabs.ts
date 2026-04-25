@@ -1,6 +1,8 @@
-/** Stateless tab addressing: `--tab <input>` → canonical full targetId via /json/list. */
+/** Stateless tab addressing: `--tab <input>` → canonical full targetId via CDP `Target.getTargets`. */
 
-/** Raw entry shape from Chrome's /json/list endpoint. */
+import { createBrowserConnection } from "./connection.ts";
+
+/** A page tab, as the CLI thinks of it. */
 export interface HttpTab {
   id: string;
   type: string;
@@ -8,16 +10,28 @@ export interface HttpTab {
   title: string;
 }
 
-export type Fetcher = (url: string) => Promise<Response>;
+/** Enumerate live page tabs from Chrome. */
+export type TargetLister = (wsUrl: string) => Promise<HttpTab[]>;
 
-/** Fetch tabs from Chrome's /json/list endpoint. */
-export async function listHttpTabs(port: number, fetcher: Fetcher = fetch): Promise<HttpTab[]> {
-  const res = await fetcher(`http://127.0.0.1:${port}/json/list`);
-  if (!res.ok) {
-    await res.body?.cancel();
-    throw new Error(`Chrome /json/list returned ${res.status}`);
+/**
+ * Enumerate Chrome's live page targets via CDP `Target.getTargets` over the
+ * browser-level WebSocket. Replaces the older `/json/list` HTTP probe, which
+ * Chrome's new MCP-server mode (chrome://inspect's "Remote debugging" toggle)
+ * blocks. CDP-over-WebSocket works in both classic and MCP-hosting modes.
+ */
+export async function listBrowserTargets(wsUrl: string): Promise<HttpTab[]> {
+  const browser = await createBrowserConnection(wsUrl);
+  try {
+    const pages = await browser.listPages();
+    return pages.map((p) => ({
+      id: p.pageId,
+      type: "page",
+      url: p.url,
+      title: p.title,
+    }));
+  } finally {
+    browser.close();
   }
-  return await res.json() as HttpTab[];
 }
 
 /**
@@ -56,10 +70,10 @@ export function matchTabByPrefix(input: string, tabs: readonly HttpTab[]): strin
  */
 export async function canonicalizeTargetId(
   input: string,
-  port: number,
-  fetcher: Fetcher = fetch,
+  wsUrl: string,
+  lister: TargetLister = listBrowserTargets,
 ): Promise<string> {
   if (!input) return matchTabByPrefix(input, []);
-  const tabs = await listHttpTabs(port, fetcher);
+  const tabs = await lister(wsUrl);
   return matchTabByPrefix(input, tabs);
 }
