@@ -8,7 +8,7 @@ import {
   createBrowserConnection,
   createPageConnection,
   defaultUserDataDir,
-  listHttpTabs,
+  listBrowserTargets,
   matchTabByPrefix,
   readDevToolsActivePort,
   resolveTarget,
@@ -226,18 +226,21 @@ const app = createScraperApp({
   warn: (s) => Deno.stderr.writeSync(encoder.encode(s)),
 });
 
+async function browserWsUrl(): Promise<string> {
+  const { port, wsPath } = await readDevToolsActivePort(userDataDir);
+  return buildBrowserWsUrl(port, wsPath);
+}
+
 async function canonicalizeTab(input: string): Promise<string> {
   // Missing-flag check short-circuits before any Chrome I/O so
   // `scraper snapshot` (etc.) without `--tab` reports the documented error
   // even when Chrome isn't running.
   if (!input) return matchTabByPrefix(input, []);
-  const { port } = await readDevToolsActivePort(userDataDir);
-  return await canonicalizeTargetId(input, port);
+  return await canonicalizeTargetId(input, await browserWsUrl());
 }
 
 async function listTabs(): Promise<TabInfo[]> {
-  const { port } = await readDevToolsActivePort(userDataDir);
-  const tabs = await listHttpTabs(port);
+  const tabs = await listBrowserTargets(await browserWsUrl());
   return tabs
     .filter((t) => t.type === "page")
     .map(({ id, url, title }) => ({ id, url, title }));

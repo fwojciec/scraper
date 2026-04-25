@@ -51,40 +51,42 @@ Deno.test("matchTabByPrefix: empty input throws missing-flag error", () => {
   );
 });
 
-Deno.test("canonicalizeTargetId: fetches /json/list and returns canonical id", async () => {
-  const fetches: string[] = [];
-  const fetcher = (url: string) => {
-    fetches.push(url);
-    return Promise.resolve(
-      new Response(JSON.stringify(tabs), { status: 200 }),
-    );
+Deno.test("canonicalizeTargetId: enumerates targets via lister and returns canonical id", async () => {
+  const calls: string[] = [];
+  const lister = (wsUrl: string) => {
+    calls.push(wsUrl);
+    return Promise.resolve(tabs);
   };
-  const got = await canonicalizeTargetId("4AE7B2C9", 9222, fetcher);
+  const got = await canonicalizeTargetId(
+    "4AE7B2C9",
+    "ws://127.0.0.1:9222/devtools/browser/abc",
+    lister,
+  );
   assertEquals(got, "4AE7B2C9E1D4F0A2B8C6E1F3A5D9B7C2");
-  assertEquals(fetches, ["http://127.0.0.1:9222/json/list"]);
+  assertEquals(calls, ["ws://127.0.0.1:9222/devtools/browser/abc"]);
 });
 
-Deno.test("canonicalizeTargetId: propagates non-OK http response", async () => {
-  const fetcher = () => Promise.resolve(new Response("boom", { status: 500 }));
+Deno.test("canonicalizeTargetId: propagates lister errors", async () => {
+  const lister = () => Promise.reject(new Error("boom"));
   await assertRejects(
-    () => canonicalizeTargetId("abc", 9222, fetcher),
+    () => canonicalizeTargetId("abc", "ws://127.0.0.1:9222/devtools/browser/abc", lister),
     Error,
-    "Chrome /json/list returned 500",
+    "boom",
   );
 });
 
 Deno.test("canonicalizeTargetId: empty input short-circuits before any Chrome I/O", async () => {
-  let fetched = false;
-  const fetcher = () => {
-    fetched = true;
-    return Promise.reject(new Error("fetch should not run — empty input must short-circuit"));
+  let called = false;
+  const lister = () => {
+    called = true;
+    return Promise.reject(new Error("lister should not run — empty input must short-circuit"));
   };
   await assertRejects(
-    () => canonicalizeTargetId("", 9222, fetcher),
+    () => canonicalizeTargetId("", "ws://127.0.0.1:9222/devtools/browser/abc", lister),
     Error,
     "--tab <targetId> is required. Run `scraper tabs` to list tabs, or `scraper navigate --new <url>` to open a new one.",
   );
-  assertEquals(fetched, false);
+  assertEquals(called, false);
 });
 
 // Small sync throw helper (assertThrows exists in @std/assert but returns void).

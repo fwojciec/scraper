@@ -6,8 +6,16 @@ export interface DevToolsActivePort {
 }
 
 /**
- * Read Chrome's DevToolsActivePort file from the given user data directory.
- * Returns the port and WebSocket path for connecting to the browser.
+ * Locate the running Chrome's DevTools WebSocket.
+ *
+ * Tries two mechanisms, in order:
+ *   1. `DevToolsActivePort` in the user data dir (written when Chrome is
+ *      launched with `--remote-debugging-port=<n>`).
+ *   2. HTTP discovery via `/json/version` on `SCRAPER_DEBUG_PORT` (default
+ *      9222) — for a CDP server running on a known port when the file is
+ *      unavailable. Note: the `chrome://inspect` "Remote debugging" toggle
+ *      runs Chrome's MCP server on 9222, NOT a CDP server, so this fallback
+ *      does not rescue that case.
  */
 export async function readDevToolsActivePort(
   userDataDir: string,
@@ -18,9 +26,7 @@ export async function readDevToolsActivePort(
     content = await Deno.readTextFile(filePath);
   } catch (e) {
     if (e instanceof Deno.errors.NotFound) {
-      throw new Error(
-        "DevToolsActivePort not found — enable remote debugging in chrome://inspect/#remote-debugging",
-      );
+      return await discoverViaHttp();
     }
     throw e;
   }
@@ -33,6 +39,66 @@ export async function readDevToolsActivePort(
     throw new Error(`DevToolsActivePort has non-numeric port: ${lines[0]}`);
   }
   const wsPath = lines[1];
+  return { port, wsPath };
+}
+
+async function discoverViaHttp(): Promise<DevToolsActivePort> {
+  const portEnv = Deno.env.get("SCRAPER_DEBUG_PORT");
+  if (portEnv === "") {
+    throw notFoundError();
+  }
+  const port = portEnv === undefined ? 9222 : parseInt(portEnv, 10);
+  if (isNaN(port)) {
+    throw new Error(`SCRAPER_DEBUG_PORT has non-numeric value: ${portEnv}`);
+  }
+  const url = `http://127.0.0.1:${port}/json/version`;
+  let res: Response;
+  try {
+    res = await fetch(url);
+  } catch {
+    throw notFoundError();
+  }
+  if (!res.ok) {
+    await res.body?.cancel();
+    throw notFoundError();
+  }
+  const body = await res.json() as { webSocketDebuggerUrl?: unknown };
+  const wsUrl = body.webSocketDebuggerUrl;
+  if (typeof wsUrl !== "string") {
+    throw new Error(`/json/version missing webSocketDebuggerUrl at ${url}`);
+  }
+  return parseBrowserWsUrl(wsUrl);
+}
+
+function notFoundError(): Error {
+  return new Error(
+    "DevToolsActivePort not found and no CDP server responding on " +
+      "SCRAPER_DEBUG_PORT (default 9222) — relaunch Chrome with " +
+      "--remote-debugging-port=0 so it writes the port file. " +
+      "Note: the chrome://inspect 'Remote debugging' toggle serves an MCP " +
+      "endpoint on 9222, not CDP, and is not compatible with scraper.",
+  );
+}
+
+/** Parse a `ws://host:port/path` URL into `{ port, wsPath }`. */
+export function parseBrowserWsUrl(wsUrl: string): DevToolsActivePort {
+  let url: URL;
+  try {
+    url = new URL(wsUrl);
+  } catch {
+    throw new Error(`could not parse ws URL: ${wsUrl}`);
+  }
+  if (url.protocol !== "ws:" && url.protocol !== "wss:") {
+    throw new Error(`expected ws:// URL, got ${wsUrl}`);
+  }
+  if (!url.port) {
+    throw new Error(`ws URL missing port: ${wsUrl}`);
+  }
+  const port = parseInt(url.port, 10);
+  if (isNaN(port)) {
+    throw new Error(`ws URL has non-numeric port: ${wsUrl}`);
+  }
+  const wsPath = url.pathname + url.search;
   return { port, wsPath };
 }
 
@@ -55,14 +121,14 @@ export function defaultUserDataDir(channel?: string, os?: string): string {
 function chromeDirMac(channel?: string): string {
   switch (channel) {
     case "beta":
-      return "Google Chrome Beta";
+      return "Google/Chrome Beta";
     case "canary":
-      return "Google Chrome Canary";
+      return "Google/Chrome Canary";
     case "dev":
-      return "Google Chrome Dev";
+      return "Google/Chrome Dev";
     case "stable":
     case undefined:
-      return "Google Chrome";
+      return "Google/Chrome";
     default:
       throw new Error(`unknown Chrome channel: ${channel}`);
   }
